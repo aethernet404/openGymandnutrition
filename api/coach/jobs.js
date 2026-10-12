@@ -27,6 +27,7 @@ import { handleFor } from './handle.js';
 import { fetchFor } from './node-fetch.js';
 import { canDropPrivileges, unprivilegedIds } from './adapters/spawn.js';
 import { cohortForPayload, invalidate as invalidateCohort } from './cohort.js';
+import { nutritionForCoach } from '../nutrition/coach-summary.js';
 
 // The prompt assembly, the plan fingerprint and the invoke→parse→validate→repair loop all
 // live in ./core now, where the phone can import them too. Re-exported so nothing that
@@ -346,6 +347,10 @@ async function execute(job) {
     // this person opted in; null otherwise, and the payload then carries no `cohort` at all.
     cohort: (job.kind === 'review' || job.kind === 'debrief') ? cohortForPayload(job.uid) : null
   });
+  // Food, only if this person switched sharing on in Nutrition: numbers only, read-only
+  // (api/nutrition/coach-summary.js). Absent otherwise, so nothing changes for anyone who didn't.
+  const nutrition = nutritionForCoach(job.uid, { today: payload.meta?.today });
+  if (nutrition) payload.nutrition = nutrition;
   // The payload is paid for with the instance's key, and it is built from state the client
   // wrote. The builder bounds each field; a payload that is still bigger than any real training
   // history makes is refused here, before a provider is called, rather than sent and billed.

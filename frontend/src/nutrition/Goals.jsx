@@ -73,6 +73,21 @@ function UsdaKey() {
   </Section>
 }
 
+// Opt-in, off by default. The footer says exactly what leaves, because that is the whole consent.
+function CoachShare() {
+  const [coach, setCoach] = useState(null)
+  useEffect(() => { nutri.getConfig().then(c => setCoach(c.coach)).catch(() => {}) }, [])
+  if (!coach?.available) return null
+  const toggle = async on => {
+    try { await nutri.setCoachShare(on); setCoach(c => ({ ...c, share: on })); toast(on ? nt('The Coach can now see your food summary') : nt('The Coach no longer sees your food')) } catch (e) { toast(e.message) }
+  }
+  return <Section title={nt('AI Coach')} footer={nt('When on, each Coach request includes your calories and macros for the last two weeks (a number per logged day), their average, and the goals above. No food names, brands, notes or photos. The Coach can read this and can never change your food log. Turn it off any time.')}>
+    <Row icon="sparkles" iconTint="var(--green)" title={nt('Share a food summary with the Coach')}>
+      <Switch checked={!!coach.share} onChange={toggle} />
+    </Row>
+  </Section>
+}
+
 export default function Goals() {
   const nav = useNavigate()
   const user = useStore(s => s.user)
@@ -109,6 +124,7 @@ export default function Goals() {
       <div style={{ height: 14 }} />
       <Button variant="primary" onClick={save} disabled={busy}>{nt('Save goals')}</Button>
     </div>}
+    {g && <CoachShare />}
     {user?.admin && <Admin />}
     {user?.admin && <UsdaKey />}
   </div>

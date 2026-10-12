@@ -30,3 +30,4 @@ export const testUsda = () => send('POST', '/api/admin/nutrition/test-usda', {})
 
 // The model has up to 90 s on the server; the client waits a little longer than that.
 export const analyze = body => api('/api/nutrition/analyze', { method: 'POST', body: JSON.stringify(body), timeout: 100000 })
+export const setCoachShare = share => send('PUT', '/api/nutrition/coach-share', { share })

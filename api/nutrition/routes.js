@@ -8,6 +8,7 @@
 import * as cfg from './config.js';
 import * as store from './store.js';
 import * as v from './validate.js';
+import * as coachCfg from '../coach/config.js';
 import { createLookup, cleanBarcode } from './lookup.js';
 import { createWindow } from '../rate-limit.js';
 import { createAnalyzer, availability, checkInput, FAILURES } from './analyze.js';
@@ -84,7 +85,9 @@ export function nutritionRoutes({ json, readBody, readSession, requireAdmin, loo
       const avail = availability(user.id);
       json(res, 200, {
         ai: { limit: c.aiDailyCap, used, remaining: Math.max(0, c.aiDailyCap - used), available: avail.ok && c.aiDailyCap > 0, reason: c.aiDailyCap === 0 ? 'off' : avail.ok ? null : avail.code },
-        lookup: { off: true, usda: c.usdaKeySet }, meals: v.MEALS
+        lookup: { off: true, usda: c.usdaKeySet }, meals: v.MEALS,
+        // Whether there is a Coach to share with at all, and whether this profile has chosen to.
+        coach: { available: coachCfg.isEnabled() && coachCfg.isConnected(), share: d.coachShare === true }
       });
     }),
 
@@ -252,6 +255,14 @@ export function nutritionRoutes({ json, readBody, readSession, requireAdmin, loo
         return aiFail(res, result.code, user.id, result.detail);
       }
       json(res, 200, { draft: result.draft, ms: result.ms, calls: result.calls, ai: allowance(user.id) });
+    }),
+
+    // Opt in or out of letting the Coach read a numbers-only summary (never writes anything).
+    'PUT /api/nutrition/coach-share': guarded(async (req, res, user) => {
+      const body = await readBody(req);
+      if (typeof body?.share !== 'boolean') return fail(res, 400, 'share must be true or false');
+      await store.mutate(user.id, d => { d.coachShare = body.share; });
+      json(res, 200, { share: body.share });
     }),
 
     'GET /api/nutrition/goals': guarded(async (req, res, user) => {

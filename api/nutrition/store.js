@@ -32,7 +32,7 @@ const fileFor = uid => {
   if (!s) throw new Error('no user id');
   return path.join(dataDir(), s + '.json');
 };
-const EMPTY = () => ({ v: 1, goals: null, foods: {}, days: {}, ai: null });
+const EMPTY = () => ({ v: 1, goals: null, foods: {}, days: {}, ai: null, coachShare: false });
 const newId = () => crypto.randomBytes(9).toString('base64url');
 const todayUTC = () => new Date().toISOString().slice(0, 10);
 

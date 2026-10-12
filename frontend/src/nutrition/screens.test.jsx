@@ -19,7 +19,7 @@ const m = vi.hoisted(() => ({
   api: {
     getDay: vi.fn(), getConfig: vi.fn(), addEntries: vi.fn(), updateEntry: vi.fn(), deleteEntry: vi.fn(),
     listFoods: vi.fn(), createFood: vi.fn(), updateFood: vi.fn(), deleteFood: vi.fn(), getGoals: vi.fn(), putGoals: vi.fn(),
-    getAdmin: vi.fn(), putAdmin: vi.fn(), getRange: vi.fn(), searchFoods: vi.fn(), lookupBarcode: vi.fn(), testUsda: vi.fn(), analyze: vi.fn()
+    getAdmin: vi.fn(), putAdmin: vi.fn(), getRange: vi.fn(), searchFoods: vi.fn(), lookupBarcode: vi.fn(), testUsda: vi.fn(), analyze: vi.fn(), setCoachShare: vi.fn()
   }
 }))
 
@@ -694,6 +694,24 @@ describe('Home card, router, goals, foods', () => {
     await setValue(host.querySelector('.nut-cap input'), '12')
     await click(byText('button', 'Save'))
     expect(m.api.putAdmin).toHaveBeenCalledWith({ aiDailyCap: 12 })
+  })
+
+  it('Coach sharing: shown only when there is a Coach, off by default, says what leaves, and toggles', async () => {
+    m.api.getGoals.mockResolvedValue({ goals: null })
+    m.api.getConfig.mockResolvedValue({ ai: { limit: 30, used: 0, remaining: 30, available: true }, coach: { available: false, share: false } })
+    await mount(<Goals />)
+    expect(text()).not.toContain('Share a food summary')
+    act(() => root.unmount()); root = createRoot(host)
+    m.api.getConfig.mockResolvedValue({ ai: { limit: 30, used: 0, remaining: 30, available: true }, coach: { available: true, share: false } })
+    m.api.setCoachShare.mockResolvedValue({ share: true })
+    await mount(<Goals />)
+    expect(text()).toContain('Share a food summary with the Coach')
+    expect(text()).toContain('No food names, brands, notes or photos')
+    expect(text()).toContain('never change your food log')
+    expect(host.querySelector('[role="switch"]').getAttribute('aria-checked')).toBe('false')
+    await click(host.querySelector('[role="switch"]'))
+    expect(m.api.setCoachShare).toHaveBeenCalledWith(true)
+    expect(host.querySelector('[role="switch"]').getAttribute('aria-checked')).toBe('true')
   })
 
   it('admin USDA card: explains how to get a key, saves it, tests it, and can remove it', async () => {
