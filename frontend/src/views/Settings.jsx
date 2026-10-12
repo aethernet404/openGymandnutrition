@@ -962,6 +962,7 @@ function SettingsRoot({ ctx, preview, open, user, sync, home, go }) {
             value={preview[id]?.() || null} accessory="chevron" onClick={() => open(id)} className="sp-root-row" />)}
         </Section>
       ))}
+      {user && <Section><Row icon="flame" iconTint="var(--green)" title="Nutrition" accessory="chevron" onClick={() => nav('/nutrition')} className="sp-root-row" /></Section>}
       <div className="dim small sp-version">openGym v{__APP_VERSION__}</div>
     </>}
   </div>
