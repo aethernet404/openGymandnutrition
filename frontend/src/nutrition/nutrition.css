@@ -73,3 +73,24 @@
 .nut-implied.warn{color:var(--orange)}
 .nut .center{text-align:center}
 .nut .linkbtn{color:var(--acc);text-decoration:underline;font-size:inherit}
+
+/* ---- search, barcode ---- */
+.nut-banner{display:flex;align-items:flex-start;gap:8px;font-size:13px;line-height:1.35;padding:9px 11px;border-radius:10px;margin-top:10px;background:var(--surface-2);color:var(--label-2)}
+.nut-banner .icn{flex:none;font-size:15px;margin-top:1px}
+.nut-banner.warn{color:var(--orange)}
+.nut-banner span{flex:1}
+.nut-banner .linkbtn{flex:none}
+.nut-pick-r{display:flex;flex-direction:column;align-items:flex-end;gap:3px;flex:none}
+.nut-src{font-size:10px;padding:1px 6px}
+.nut-picked .nut-src{margin-inline-start:8px;vertical-align:1px}
+.nut-pick-list.stale{opacity:.5}
+.nut-barcode{margin-top:10px}
+.nut-barcode .field{flex:1;min-width:0;background:var(--surface-2)}
+.nut-typelink{display:block;margin:10px auto 0;font-size:13px}
+.nut-cam{position:relative;border-radius:14px;overflow:hidden;background:#000;aspect-ratio:4/3}
+.nut-cam video{width:100%;height:100%;object-fit:cover}
+.nut-cam-line{position:absolute;left:10%;right:10%;top:50%;height:2px;background:var(--red);opacity:.8;box-shadow:0 0 8px var(--red)}
+.nut-usda-row{gap:8px;flex-wrap:wrap}
+.nut-usda-row .field{flex:1;min-width:140px;background:var(--surface-2)}
+.nut-usda-help{display:block}
+.nut-usda-help a{color:var(--acc);word-break:break-all}

@@ -18,7 +18,7 @@ const m = vi.hoisted(() => ({
   api: {
     getDay: vi.fn(), getConfig: vi.fn(), addEntries: vi.fn(), updateEntry: vi.fn(), deleteEntry: vi.fn(),
     listFoods: vi.fn(), createFood: vi.fn(), updateFood: vi.fn(), deleteFood: vi.fn(), getGoals: vi.fn(), putGoals: vi.fn(),
-    getAdmin: vi.fn(), putAdmin: vi.fn(), getRange: vi.fn()
+    getAdmin: vi.fn(), putAdmin: vi.fn(), getRange: vi.fn(), searchFoods: vi.fn(), lookupBarcode: vi.fn(), testUsda: vi.fn()
   }
 }))
 
@@ -183,6 +183,7 @@ describe('sheets', () => {
     m.api.addEntries.mockResolvedValue({})
     openAddSheet({ date: '2026-10-12', meal: 'lunch', onSaved })
     const s = await showSheet()
+    await click(byText('button', 'Quick add'))
     const inputs = s.el.querySelectorAll('.nut-input input')
     await setValue(inputs[0], '420'); await setValue(inputs[1], '30')
     await setValue(s.el.querySelector('input[placeholder="Name (optional)"]'), 'Burrito')
@@ -194,6 +195,7 @@ describe('sheets', () => {
   it('quick add refuses an empty calories box and sends nothing', async () => {
     openAddSheet({ date: '2026-10-12', meal: 'lunch', onSaved: vi.fn() })
     const s = await showSheet()
+    await click(byText('button', 'Quick add'))
     await click(byText('button', 'Add to lunch'))
     expect(m.api.addEntries).not.toHaveBeenCalled()
     expect(m.toast).toHaveBeenCalledWith('Enter the calories')
@@ -204,6 +206,7 @@ describe('sheets', () => {
     m.api.addEntries.mockRejectedValue(new Error('a day can hold at most 200 entries'))
     openAddSheet({ date: '2026-10-12', meal: 'lunch', onSaved: vi.fn() })
     const s = await showSheet()
+    await click(byText('button', 'Quick add'))
     await setValue(s.el.querySelectorAll('.nut-input input')[0], '100')
     await click(byText('button', 'Add to lunch'))
     expect(m.toast).toHaveBeenCalledWith('a day can hold at most 200 entries')
@@ -265,6 +268,159 @@ describe('sheets', () => {
   })
 })
 
+const NUTELLA = { source: 'off', ext: '3017620422003', name: 'Nutella', brand: 'Ferrero', bases: [
+  { label: '15 g', grams: 15, per: { calories: 81, protein_g: 0.9, carbs_g: 8.6, fat_g: 4.6 } },
+  { label: '100 g', grams: 100, per: { calories: 539, protein_g: 6.3, carbs_g: 57.5, fat_g: 30.9 } }
+] }
+const wait = ms => act(async () => { await new Promise(r => setTimeout(r, ms)) })
+const found = (results = [NUTELLA], sources = { off: { ok: true, count: results.length }, usda: { ok: false, skipped: 'no-key' } }) => ({ q: 'nutella', results, sources })
+
+describe('search, portions and barcodes', () => {
+  async function openSearch() {
+    openAddSheet({ date: '2026-10-12', meal: 'snack', onSaved: vi.fn() })
+    return showSheet()
+  }
+  const typeSearch = async (s, v) => { await setValue(s.el.querySelector('input[placeholder="Search foods"]'), v); await wait(520) }
+
+  it('opens on Search, searches after a pause, and says USDA is off when no key is set', async () => {
+    m.api.searchFoods.mockResolvedValue(found())
+    const s = await openSearch()
+    expect(s.el.textContent).toContain('Search Open Food Facts and USDA')
+    await typeSearch(s, 'nutella')
+    expect(m.api.searchFoods).toHaveBeenCalledTimes(1)
+    expect(m.api.searchFoods).toHaveBeenCalledWith('nutella')
+    expect(s.el.textContent).toContain('Nutella')
+    expect(s.el.textContent).toContain('Ferrero · 15 g')
+    expect(s.el.textContent).toContain('an admin has not added a key')
+  })
+
+  it('does not search for a single letter, and a fast typist makes one request', async () => {
+    m.api.searchFoods.mockResolvedValue(found())
+    const s = await openSearch()
+    await setValue(s.el.querySelector('input[placeholder="Search foods"]'), 'n')
+    await wait(520)
+    expect(m.api.searchFoods).not.toHaveBeenCalled()
+    await setValue(s.el.querySelector('input[placeholder="Search foods"]'), 'nu')
+    await setValue(s.el.querySelector('input[placeholder="Search foods"]'), 'nut')
+    await setValue(s.el.querySelector('input[placeholder="Search foods"]'), 'nutella')
+    await wait(520)
+    expect(m.api.searchFoods).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows where to fix a missing USDA key to an admin', async () => {
+    m.user = { id: 'a', admin: true }
+    m.api.searchFoods.mockResolvedValue(found())
+    const s = await openSearch()
+    await typeSearch(s, 'nutella')
+    expect(s.el.textContent).toContain('Goals → Admin')
+  })
+
+  it('a source that is down is named, the other results still show, and Try again searches again', async () => {
+    m.api.searchFoods.mockResolvedValue(found([NUTELLA], { off: { ok: false, kind: 'timeout', error: 'Open Food Facts did not answer in time' }, usda: { ok: true, count: 1 } }))
+    const s = await openSearch()
+    await typeSearch(s, 'nutella')
+    expect(s.el.textContent).toContain('Open Food Facts did not answer in time')
+    expect(s.el.textContent).toContain('Nutella')
+    await click(byText('button', 'Try again'))
+    expect(m.api.searchFoods).toHaveBeenCalledTimes(2)
+  })
+
+  it('a failed search shows the reason instead of an empty list; a 429 is worded kindly', async () => {
+    m.api.searchFoods.mockRejectedValue(Object.assign(new Error('HTTP 429'), { status: 429 }))
+    const s = await openSearch()
+    await typeSearch(s, 'nutella')
+    expect(s.el.textContent).toContain('Too many lookups')
+    expect(s.el.textContent).not.toContain('Nothing found')
+  })
+
+  it('pick a hit, choose the 100 g portion, set grams, and the entry carries the snapshot and qty', async () => {
+    m.api.searchFoods.mockResolvedValue(found())
+    m.api.addEntries.mockResolvedValue({})
+    const onSaved = vi.fn()
+    openAddSheet({ date: '2026-10-12', meal: 'snack', onSaved })
+    const s = await showSheet()
+    await typeSearch(s, 'nutella')
+    await click(byText('.nut-pick', 'Nutella'))
+    expect(s.el.textContent).toContain('Open Food Facts')
+    expect(s.el.textContent).toContain('81')                       // one 15 g serving
+    // 2 servings of 15 g = 30 g; typing 150 g in the 15 g base is 10 servings
+    const grams = s.el.querySelector('.nut-datefield input')
+    expect(grams.value).toBe('15')
+    await setValue(grams, '150')
+    expect(s.el.textContent).toContain('810')                      // 10 × 81
+    await click(byText('button', 'Add to snacks'))
+    expect(m.api.addEntries).toHaveBeenCalledWith({
+      date: '2026-10-12', meal: 'snack', source: 'food', qty: 10,
+      food: { name: 'Nutella', brand: 'Ferrero', source: 'off', ext: '3017620422003', serving: '15 g', grams: 15, per: NUTELLA.bases[0].per }
+    })
+    expect(onSaved).toHaveBeenCalled()
+  })
+
+  it('a food whose only portion has no weight shows servings but no grams box', async () => {
+    const pot = { source: 'usda', ext: '9', name: 'Yogurt', brand: '', bases: [{ label: '1 pot', grams: null, per: { calories: 90, protein_g: 5, carbs_g: 12, fat_g: 2 } }] }
+    m.api.searchFoods.mockResolvedValue(found([pot]))
+    const s = await openSearch()
+    await typeSearch(s, 'yogurt')
+    await click(byText('.nut-pick', 'Yogurt'))
+    expect(s.el.querySelector('.nut-datefield')).toBeNull()
+    expect(s.el.textContent).toContain('One serving: 1 pot')
+  })
+
+  it('without a camera scanner the barcode button offers typing; a bad number is refused before any request', async () => {
+    const s = await openSearch()
+    await click(s.el.querySelector('[aria-label="Scan a barcode"]'))
+    expect(s.el.textContent).toContain("can't scan barcodes with the camera")
+    await setValue(s.el.querySelector('input[placeholder="Barcode number"]'), '12ab')
+    await click(byText('button', 'Look up'))
+    expect(m.toast).toHaveBeenCalledWith('A barcode is 8 to 14 digits.')
+    expect(m.api.lookupBarcode).not.toHaveBeenCalled()
+  })
+
+  it('a typed barcode finds the product, which can be added', async () => {
+    m.api.lookupBarcode.mockResolvedValue({ code: '3017620422003', found: true, product: NUTELLA })
+    m.api.addEntries.mockResolvedValue({})
+    const s = await openSearch()
+    await click(s.el.querySelector('[aria-label="Scan a barcode"]'))
+    await setValue(s.el.querySelector('input[placeholder="Barcode number"]'), '3017 6204 22003')
+    await click(byText('button', 'Look up'))
+    expect(m.api.lookupBarcode).toHaveBeenCalledWith('3017620422003')
+    await click(byText('.nut-pick', 'Nutella'))
+    await click(byText('button', 'Add to snacks'))
+    expect(m.api.addEntries.mock.calls[0][0].food.ext).toBe('3017620422003')
+    expect(m.api.addEntries.mock.calls[0][0].qty).toBe(1)
+  })
+
+  it('an unknown barcode says so and offers to save it as your own food, pre-filled', async () => {
+    m.api.lookupBarcode.mockResolvedValue({ code: '00000000', found: false, reason: 'unknown' })
+    const s = await openSearch()
+    await click(s.el.querySelector('[aria-label="Scan a barcode"]'))
+    await setValue(s.el.querySelector('input[placeholder="Barcode number"]'), '00000000')
+    await click(byText('button', 'Look up'))
+    expect(s.el.textContent).toContain('Barcode 00000000 is not in Open Food Facts')
+    const before = m.sheets.length
+    await click(byText('button', 'Add it as my food'))
+    expect(m.sheets.length).toBe(before + 1)
+    m.api.createFood.mockResolvedValue({})
+    const f = await showSheet()
+    await setValue(f.el.querySelector('input[placeholder="Name"]'), 'Local bread')
+    await setValue(f.el.querySelectorAll('.nut-input input[inputmode]')[1], '240')
+    await click(byText('button', 'Save'))
+    expect(m.api.createFood.mock.calls[0][0]).toMatchObject({ name: 'Local bread', ext: '00000000', per: { calories: 240 } })
+  })
+
+  it('a barcode lookup that fails because Open Food Facts is down offers a retry', async () => {
+    m.api.lookupBarcode.mockResolvedValueOnce({ code: '12345678', found: false, reason: 'error', kind: 'down', error: 'Open Food Facts is not answering right now' })
+      .mockResolvedValue({ code: '12345678', found: true, product: NUTELLA })
+    const s = await openSearch()
+    await click(s.el.querySelector('[aria-label="Scan a barcode"]'))
+    await setValue(s.el.querySelector('input[placeholder="Barcode number"]'), '12345678')
+    await click(byText('button', 'Look up'))
+    expect(s.el.textContent).toContain('Open Food Facts is not answering right now')
+    await click(byText('button', 'Try again'))
+    expect(s.el.textContent).toContain('Nutella')
+  })
+})
+
 describe('Home card, router, goals, foods', () => {
   it('home card shows today against the goal', async () => {
     await mount(<NutritionHomeCard />)
@@ -317,6 +473,33 @@ describe('Home card, router, goals, foods', () => {
     await setValue(host.querySelector('.nut-cap input'), '12')
     await click(byText('button', 'Save'))
     expect(m.api.putAdmin).toHaveBeenCalledWith({ aiDailyCap: 12 })
+  })
+
+  it('admin USDA card: explains how to get a key, saves it, tests it, and can remove it', async () => {
+    m.user = { id: 'a', admin: true }
+    m.api.getGoals.mockResolvedValue({ goals: null })
+    m.api.getAdmin.mockResolvedValue({ enabled: true, aiDailyCap: 30, aiCapMax: 500, aiCapDefault: 30, usdaKeySet: false, usdaKeyHint: null })
+    await mount(<Goals />)
+    expect(text()).toContain('No key set')
+    expect(text()).toContain('Open Food Facts only')
+    const link = host.querySelector('a[href="https://fdc.nal.usda.gov/api-key-signup"]')
+    expect(link).toBeTruthy()
+    expect(link.rel).toContain('noopener')
+    const input = host.querySelector('input[type="password"]')
+    const save = [...host.querySelectorAll('button')].filter(b => b.textContent === 'Save').at(-1)
+    expect(save.disabled).toBe(true)
+    m.api.putAdmin.mockResolvedValue({ enabled: true, aiDailyCap: 30, aiCapMax: 500, aiCapDefault: 30, usdaKeySet: true, usdaKeyHint: '…5678' })
+    await setValue(input, '  abcd1234EFGH5678 ')
+    await click([...host.querySelectorAll('button')].filter(b => b.textContent === 'Save').at(-1))
+    expect(m.api.putAdmin).toHaveBeenCalledWith({ usdaKey: 'abcd1234EFGH5678' })
+    expect(text()).toContain('Key set (…5678)')
+    m.api.testUsda.mockResolvedValue({ ok: false, error: 'USDA FoodData Central rejected the API key', kind: 'auth', ms: 80 })
+    await click(byText('button', 'Test key'))
+    expect(text()).toContain('rejected the API key')
+    m.api.putAdmin.mockResolvedValue({ enabled: true, aiDailyCap: 30, aiCapMax: 500, aiCapDefault: 30, usdaKeySet: false, usdaKeyHint: null })
+    await click(byText('button', 'Remove key'))
+    expect(m.api.putAdmin).toHaveBeenLastCalledWith({ usdaKey: '' })
+    expect(text()).toContain('No key set')
   })
 
   it('foods: lists by scope, stars a food', async () => {

@@ -122,13 +122,13 @@ export function food(body, { partial = false } = {}) {
  * an entry never has to know how it was made. With a `foodId`, macros may be left out and the
  * route fills them from the food × qty — that is `needsFood` here.
  */
-export function entry(body, { partial = false } = {}) {
+export function entry(body, { partial = false, foodGiven = false } = {}) {
   if (!isObj(body)) return bad('send each entry as an object');
   const out = {};
   if (!partial || body.name !== undefined) {
     const name = clean(body.name, LIMITS.name);
     // With a foodId the name comes from the food.
-    if (!name && !(body.foodId && !partial)) return bad('an entry needs a name');
+    if (!name && !((body.foodId || foodGiven) && !partial)) return bad('an entry needs a name');
     out.name = name;
   }
   if (!partial || body.brand !== undefined) out.brand = clean(body.brand, LIMITS.brand);
@@ -161,7 +161,7 @@ export function entry(body, { partial = false } = {}) {
   if (body.note !== undefined) out.note = clean(body.note, 200);
 
   const hasMacros = MACROS.some(k => body[k] !== undefined);
-  if (hasMacros || (!partial && !out.foodId)) {
+  if (hasMacros || (!partial && !out.foodId && !foodGiven)) {
     const m = macrosOf(body, { partial });
     if (!m.ok) return m;
     Object.assign(out, m.value);

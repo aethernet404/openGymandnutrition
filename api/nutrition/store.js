@@ -109,7 +109,7 @@ export function range(d, from, to) {
 /* ---------- foods ---------- */
 
 const norm = s => String(s || '').toLowerCase().replace(/\s+/g, ' ').trim();
-const foodKey = f => f.ext ? `${f.source}|${f.ext}` : `${f.source}|${norm(f.name)}|${norm(f.brand)}|${f.per.calories}|${f.per.protein_g}|${f.per.carbs_g}|${f.per.fat_g}`;
+const foodKey = f => f.ext ? `${f.source}|${f.ext}|${norm(f.serving?.label)}|${f.serving?.grams ?? ''}` : `${f.source}|${norm(f.name)}|${norm(f.brand)}|${f.per.calories}|${f.per.protein_g}|${f.per.carbs_g}|${f.per.fat_g}`;
 
 function pruneRecents(d) {
   const recents = Object.values(d.foods).filter(f => f.source !== 'custom' && !f.favorite);

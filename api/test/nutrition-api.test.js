@@ -7,6 +7,7 @@ import path from 'node:path';
 
 const DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'nutrition-test-'));
 process.env.DATA_DIR = DIR;
+fs.writeFileSync(path.join(DIR, 'secret'), 'b'.repeat(64), { mode: 0o600 });   // what server.js creates at boot; the USDA key is encrypted with it
 const store = await import('../nutrition/store.js');
 const cfg = await import('../nutrition/config.js');
 const v = await import('../nutrition/validate.js');
@@ -16,7 +17,7 @@ after(() => fs.rmSync(DIR, { recursive: true, force: true }));
 
 /* A minimal stand-in for server.js's helpers: sessions by a header, JSON bodies as given. */
 const USERS = { a: { id: 'ua', admin: false }, b: { id: 'ub', admin: false }, admin: { id: 'uadm', admin: true } };
-function call(routes, key, { as = 'a', body, url } = {}) {
+function call(routes, key, { as = 'a', body, url, lookup } = {}) {
   const [method, p] = key.split(' ');
   const req = { method, url: url || p, user: USERS[as], body };
   return new Promise((resolve, reject) => {
@@ -26,7 +27,8 @@ function call(routes, key, { as = 'a', body, url } = {}) {
       json: jsonFn,
       readBody: async q => q.body ?? {},
       readSession: q => q.user || null,
-      requireAdmin: (q, r) => { if (!q.user) { jsonFn(r, 401, {}); return null; } if (!q.user.admin) { jsonFn(r, 403, {}); return null; } return q.user; }
+      requireAdmin: (q, r) => { if (!q.user) { jsonFn(r, 401, {}); return null; } if (!q.user.admin) { jsonFn(r, 403, {}); return null; } return q.user; },
+      ...(lookup ? { lookup } : {})
     });
     Promise.resolve(r2[key](req, res)).then(() => { if (!res.status) resolve(res); }, reject);
   });
@@ -248,4 +250,123 @@ test('recents are deduplicated and pruned to a bound', async () => {
   const recents = Object.values(d.foods).filter(x => x.source !== 'custom');
   assert.ok(recents.length <= v.LIMITS.recentFoods);
   assert.ok(Object.values(d.foods).some(x => x.name === 'mine'), 'custom foods are never pruned');
+});
+
+
+/* ------------------------------ 2c: lookups ------------------------------ */
+
+const NUTELLA = { source: 'off', ext: '3017620422003', name: 'Nutella', brand: 'Ferrero', bases: [{ label: '15 g', grams: 15, per: { calories: 81, protein_g: 0.9, carbs_g: 8.6, fat_g: 4.6 } }, { label: '100 g', grams: 100, per: { calories: 539, protein_g: 6.3, carbs_g: 57.5, fat_g: 30.9 } }] };
+const fakeLookup = (over = {}) => {
+  const calls = { search: [], barcode: [] };
+  return {
+    calls,
+    search: async (q, o) => { calls.search.push([q, o]); return { results: [NUTELLA], sources: { off: { ok: true, count: 1 }, usda: o.usdaKey ? { ok: true, count: 0 } : { ok: false, skipped: 'no-key' } } }; },
+    barcode: async code => { calls.barcode.push(code); return code === '3017620422003' ? { found: true, product: NUTELLA } : { found: false, reason: 'unknown' }; },
+    ...over
+  };
+};
+
+test('search and barcode need a session and sane input', async () => {
+  const lk = fakeLookup();
+  const R2 = nutritionRoutes({ json() {}, readBody() {}, readSession() {}, requireAdmin() {}, lookup: lk });
+  assert.equal((await call(R2, 'GET /api/nutrition/search', { as: 'nobody', url: '/api/nutrition/search?q=nutella', lookup: lk })).status, 401);
+  assert.equal((await call(R2, 'GET /api/nutrition/search', { url: '/api/nutrition/search?q=n', lookup: lk })).status, 400);
+  assert.equal((await call(R2, 'GET /api/nutrition/search', { url: '/api/nutrition/search?q=nutella&source=evil', lookup: lk })).status, 400);
+  assert.equal((await call(R2, 'GET /api/nutrition/barcode', { url: '/api/nutrition/barcode?code=abc', lookup: lk })).status, 400);
+  assert.equal((await call(R2, 'GET /api/nutrition/barcode', { url: '/api/nutrition/barcode?code=../../x', lookup: lk })).status, 400);
+  assert.deepEqual(lk.calls, { search: [], barcode: [] }, 'bad input never reaches the outside world');
+});
+
+test('search passes the stored USDA key only when one is set, and says USDA is off otherwise', async () => {
+  const lk = fakeLookup();
+  const none = await call(R, 'GET /api/nutrition/search', { url: '/api/nutrition/search?q=nutella', lookup: lk });
+  assert.equal(none.out.sources.usda.skipped, 'no-key');
+  assert.equal(lk.calls.search[0][1].usdaKey, null);
+  assert.equal((await call(R, 'GET /api/nutrition/config', { as: 'a' })).out.lookup.usda, false);
+
+  const set = await call(R, 'PUT /api/admin/nutrition', { as: 'admin', body: { usdaKey: 'abcd1234EFGH5678' } });
+  assert.equal(set.status, 200);
+  assert.equal(set.out.usdaKeySet, true);
+  assert.equal(set.out.usdaKeyHint, '…5678');
+  assert.ok(!JSON.stringify(set.out).includes('abcd1234'), 'the key is never echoed');
+  const onDisk = fs.readFileSync(path.join(DIR, 'nutrition', 'config.json'), 'utf8');
+  assert.ok(!onDisk.includes('abcd1234EFGH5678'), 'the key is encrypted at rest');
+  assert.equal((await call(R, 'GET /api/admin/nutrition', { as: 'admin' })).out.usdaKeyHint, '…5678');
+  assert.ok(!JSON.stringify((await call(R, 'GET /api/nutrition/config', { as: 'a' })).out).includes('5678'), 'users learn only that lookup exists');
+
+  const lk2 = fakeLookup();
+  await call(R, 'GET /api/nutrition/search', { url: '/api/nutrition/search?q=nutella&source=usda', lookup: lk2 });
+  assert.deepEqual(lk2.calls.search[0], ['nutella', { usdaKey: 'abcd1234EFGH5678', sources: 'usda' }]);
+  assert.equal((await call(R, 'GET /api/nutrition/config', { as: 'a' })).out.lookup.usda, true);
+});
+
+test('the USDA key is validated, admin-only, and can be cleared', async () => {
+  assert.equal((await call(R, 'PUT /api/admin/nutrition', { as: 'a', body: { usdaKey: 'abcd1234EFGH5678' } })).status, 403);
+  for (const bad of ['short', 'has space in it 12345', 'a'.repeat(200), '<script>alert(1)</script>', 12345678, {}]) {
+    assert.equal((await call(R, 'PUT /api/admin/nutrition', { as: 'admin', body: { usdaKey: bad } })).status, 400, JSON.stringify(bad));
+  }
+  assert.equal(cfg.load().usdaKeySet, true, 'a rejected key leaves the stored one alone');
+  const cleared = await call(R, 'PUT /api/admin/nutrition', { as: 'admin', body: { usdaKey: '' } });
+  assert.equal(cleared.out.usdaKeySet, false);
+  assert.equal((await call(R, 'POST /api/admin/nutrition/test-usda', { as: 'admin' })).status, 400, 'nothing to test');
+  // other settings survive a key change
+  await call(R, 'PUT /api/admin/nutrition', { as: 'admin', body: { aiDailyCap: 21 } });
+  await call(R, 'PUT /api/admin/nutrition', { as: 'admin', body: { usdaKey: 'abcd1234EFGH5678' } });
+  assert.equal(cfg.load().aiDailyCap, 21);
+  assert.equal(cfg.load().usdaKeySet, true);
+});
+
+test('test-usda reports a good key and a bad one in words', async () => {
+  const ok = fakeLookup({ search: async () => ({ results: [], sources: { usda: { ok: true, count: 9 } } }) });
+  const r1 = await call(R, 'POST /api/admin/nutrition/test-usda', { as: 'admin', lookup: ok });
+  assert.deepEqual([r1.out.ok, r1.out.count], [true, 9]);
+  const bad = fakeLookup({ search: async () => ({ results: [], sources: { usda: { ok: false, kind: 'auth', error: 'USDA FoodData Central rejected the API key' } } }) });
+  const r2 = await call(R, 'POST /api/admin/nutrition/test-usda', { as: 'admin', lookup: bad });
+  assert.deepEqual([r2.out.ok, r2.out.kind], [false, 'auth']);
+  assert.match(r2.out.error, /rejected/);
+});
+
+test('lookups are budgeted per profile: 40 a minute, then 429 with Retry-After', async () => {
+  const lk = fakeLookup();
+  const R2 = nutritionRoutes({ json: (res, code, obj, h) => { res.status = code; res.out = obj; res.h = h; }, readBody: async () => ({}), readSession: q => q.user, requireAdmin() {}, lookup: lk });
+  const hit = async user => { const res = {}; await R2['GET /api/nutrition/search']({ method: 'GET', url: '/api/nutrition/search?q=nutella', user }, res); return res; };
+  const codes = [];
+  for (let i = 0; i < 45; i++) codes.push((await hit(USERS.a)).status);
+  assert.equal(codes.filter(c => c === 200).length, 40);
+  assert.equal(codes.filter(c => c === 429).length, 5);
+  const limited = await hit(USERS.a);
+  assert.equal(limited.out.code, 'rate');
+  assert.ok(+limited.h['Retry-After'] >= 1);
+  assert.equal((await hit(USERS.b)).status, 200, 'another profile has its own budget');
+  assert.equal(lk.calls.search.length, 41, 'refused requests never reach the outside world');
+});
+
+test('logging a looked-up food keeps it as a recent, priced from the chosen portion', async () => {
+  const snapshot = (base, over = {}) => ({ name: NUTELLA.name, brand: NUTELLA.brand, source: 'off', ext: NUTELLA.ext, serving: base.label, grams: base.grams, per: base.per, ...over });
+  const add = await call(R, 'POST /api/nutrition/entries', { body: { date: '2026-10-30', meal: 'breakfast', source: 'food', qty: 2, food: snapshot(NUTELLA.bases[0]) } });
+  assert.equal(add.status, 201);
+  const e = add.out.entries[0];
+  assert.deepEqual([e.name, e.brand, e.serving, e.calories, e.protein_g, e.grams, e.qty], ['Nutella', 'Ferrero', '15 g', 162, 1.8, 30, 2]);
+  assert.ok(e.foodId);
+
+  // The same product logged again, same portion → the same recent, counted twice.
+  await call(R, 'POST /api/nutrition/entries', { body: { date: '2026-10-30', meal: 'snack', source: 'food', qty: 1, food: snapshot(NUTELLA.bases[0]) } });
+  // A different portion of it → a second recent (the stored numbers are per portion).
+  await call(R, 'POST /api/nutrition/entries', { body: { date: '2026-10-30', meal: 'snack', source: 'food', qty: 0.5, food: snapshot(NUTELLA.bases[1]) } });
+  const recents = (await call(R, 'GET /api/nutrition/foods', { url: '/api/nutrition/foods?scope=recent' })).out.foods.filter(f => f.ext === NUTELLA.ext);
+  assert.equal(recents.length, 2);
+  assert.equal(recents.find(f => f.serving.label === '15 g').useCount, 2);
+  assert.equal(recents[0].source, 'off');
+  const day = (await call(R, 'GET /api/nutrition/day', { url: '/api/nutrition/day?date=2026-10-30' })).out;
+  assert.equal(day.totals.calories, 162 + 81 + 270);   // 2×15 g + 1×15 g + ½×100 g (rounded 269.5 → 270)
+});
+
+test('a food snapshot cannot pose as custom, be unnamed, or arrive without an id', async () => {
+  const bad = async food => (await call(R, 'POST /api/nutrition/entries', { body: { date: '2026-10-30', meal: 'lunch', qty: 1, food } })).status;
+  const per = { calories: 10, protein_g: 1, carbs_g: 1, fat_g: 1 };
+  assert.equal(await bad({ name: 'x', source: 'custom', ext: '1', serving: '1', per }), 400);
+  assert.equal(await bad({ name: 'x', source: 'off', serving: '1', per }), 400);
+  assert.equal(await bad({ name: '', source: 'off', ext: '1', serving: '1', per }), 400);
+  assert.equal(await bad({ name: 'x', source: 'off', ext: '1', serving: '1', per: { calories: -1, protein_g: 0, carbs_g: 0, fat_g: 0 } }), 400);
+  assert.equal(await bad('nope'), 400);
 });

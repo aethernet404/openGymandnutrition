@@ -8,11 +8,21 @@
 import * as cfg from './config.js';
 import * as store from './store.js';
 import * as v from './validate.js';
+import { createLookup, cleanBarcode } from './lookup.js';
+import { createWindow } from '../rate-limit.js';
 
 const URL_BASE = 'http://x';
 const query = req => new URL(req.url, URL_BASE).searchParams;
 
-export function nutritionRoutes({ json, readBody, readSession, requireAdmin }) {
+export function nutritionRoutes({ json, readBody, readSession, requireAdmin, lookup = createLookup() }) {
+  // Lookups go out to third parties from this server's address, so they are budgeted per profile.
+  const lookups = createWindow({ max: 40, windowMs: 60000 });
+  const throttled = (res, user) => {
+    const wait = lookups.take(user.id);
+    if (wait) { json(res, 429, { error: 'too many lookups; wait a moment', code: 'rate' }, { 'Retry-After': String(wait) }); return true; }
+    return false;
+  };
+
   /** Signed in, feature on. Returns the user, or answers and returns null. */
   const guard = (req, res) => {
     const user = readSession(req);
@@ -58,7 +68,7 @@ export function nutritionRoutes({ json, readBody, readSession, requireAdmin }) {
       const c = cfg.load();
       const d = store.read(user.id);
       const used = store.aiUsed(d);
-      json(res, 200, { ai: { limit: c.aiDailyCap, used, remaining: Math.max(0, c.aiDailyCap - used) }, meals: v.MEALS });
+      json(res, 200, { ai: { limit: c.aiDailyCap, used, remaining: Math.max(0, c.aiDailyCap - used) }, lookup: { off: true, usda: c.usdaKeySet }, meals: v.MEALS });
     }),
 
     'GET /api/nutrition/day': guarded(async (req, res, user) => {
@@ -85,16 +95,31 @@ export function nutritionRoutes({ json, readBody, readSession, requireAdmin }) {
       if (!raw.length || raw.length > v.LIMITS.entriesPerRequest) return fail(res, 400, `send between 1 and ${v.LIMITS.entriesPerRequest} entries`);
       const list = [];
       for (const r of raw) {
+        // An entry may carry the food it was priced from — a search hit, a scan — as a snapshot,
+        // which is kept as a recent so the same thing is one tap next time.
+        let snapshot = null;
+        if (r && r.food !== undefined) {
+          const f = v.food(r.food);
+          if (!f.ok) return invalid(res, f);
+          if (!['off', 'usda', 'ai'].includes(f.value.source) || (f.value.source !== 'ai' && !f.value.ext)) return fail(res, 400, 'a looked-up food needs its source and id');
+          snapshot = f.value;
+        }
         // A batch inherits the day's meal unless an entry names its own.
-        const checked = v.entry({ ...(Array.isArray(body.entries) && body.meal ? { meal: body.meal } : {}), ...r });
+        const checked = v.entry({ ...(Array.isArray(body.entries) && body.meal ? { meal: body.meal } : {}), ...r }, { foodGiven: !!snapshot });
         if (!checked.ok) return invalid(res, checked);
-        list.push(checked.value);
+        list.push(snapshot ? { ...checked.value, _snapshot: snapshot } : checked.value);
       }
       const out = await store.mutate(user.id, d => {
         for (const e of list) {
+          let counted = false;
+          if (e._snapshot) {
+            const f = store.noteRecent(d, e._snapshot);
+            e.foodId = f.id; counted = true;
+            delete e._snapshot;
+          }
           const problem = resolveFood(d, e);
           if (problem) return { error: problem };
-          if (e.foodId && d.foods[e.foodId]) { const f = d.foods[e.foodId]; f.useCount = (f.useCount || 0) + 1; f.lastUsed = Date.now(); }
+          if (!counted && e.foodId && d.foods[e.foodId]) { const f = d.foods[e.foodId]; f.useCount = (f.useCount || 0) + 1; f.lastUsed = Date.now(); }
         }
         return { entries: store.addEntries(d, date, list), day: store.dayView(d, date) };
       });
@@ -173,6 +198,24 @@ export function nutritionRoutes({ json, readBody, readSession, requireAdmin }) {
       json(res, 200, { ok: true });
     }),
 
+    /* ----- lookups: Open Food Facts always; USDA once an admin has set a key ----- */
+
+    'GET /api/nutrition/search': guarded(async (req, res, user) => {
+      const q = v.clean(query(req).get('q'), 80);
+      if (q.length < 2) return fail(res, 400, 'type at least two letters to search');
+      const source = query(req).get('source') || 'all';
+      if (!['all', 'off', 'usda'].includes(source)) return fail(res, 400, 'source must be all, off or usda');
+      if (throttled(res, user)) return;
+      json(res, 200, { q, ...(await lookup.search(q, { usdaKey: cfg.usdaKey(), sources: source })) });
+    }),
+
+    'GET /api/nutrition/barcode': guarded(async (req, res, user) => {
+      const code = cleanBarcode(query(req).get('code'));
+      if (!code) return fail(res, 400, 'a barcode is 8 to 14 digits');
+      if (throttled(res, user)) return;
+      json(res, 200, { code, ...(await lookup.barcode(code)) });
+    }),
+
     'GET /api/nutrition/goals': guarded(async (req, res, user) => {
       json(res, 200, { goals: store.read(user.id).goals });
     }),
@@ -188,14 +231,25 @@ export function nutritionRoutes({ json, readBody, readSession, requireAdmin }) {
 
     'GET /api/admin/nutrition': async (req, res) => {
       if (!requireAdmin(req, res)) return;
-      json(res, 200, { ...cfg.load(), aiCapMax: cfg.AI_CAP_MAX, aiCapDefault: cfg.AI_CAP_DEFAULT });
+      json(res, 200, { ...cfg.load(), usdaKeyHint: cfg.usdaKeyHint(), aiCapMax: cfg.AI_CAP_MAX, aiCapDefault: cfg.AI_CAP_DEFAULT });
     },
 
     'PUT /api/admin/nutrition': async (req, res) => {
       if (!requireAdmin(req, res)) return;
       const r = cfg.save(await readBody(req));
       if (!r.ok) return fail(res, 400, r.error);
-      json(res, 200, r.config);
+      json(res, 200, { ...r.config, usdaKeyHint: cfg.usdaKeyHint(), aiCapMax: cfg.AI_CAP_MAX, aiCapDefault: cfg.AI_CAP_DEFAULT });
+    },
+
+    // Checks the stored USDA key with a real search, so the admin knows before anyone else finds out.
+    'POST /api/admin/nutrition/test-usda': async (req, res) => {
+      if (!requireAdmin(req, res)) return;
+      const key = cfg.usdaKey();
+      if (!key) return fail(res, 400, 'no USDA key is set');
+      const t0 = Date.now();
+      const r = await lookup.search('apple', { usdaKey: key, sources: 'usda', fresh: true });
+      const s = r.sources.usda;
+      json(res, 200, { ok: !!s?.ok, error: s?.error || null, kind: s?.kind || null, ms: Date.now() - t0, count: s?.count ?? 0 });
     }
   };
 }

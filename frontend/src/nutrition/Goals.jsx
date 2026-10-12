@@ -32,6 +32,47 @@ function Admin() {
   </Section>
 }
 
+// The one setting that needs a visit to another website. Everything about getting the key is on
+// this card, because the person who needs it is standing here with a search that says "USDA is off".
+function UsdaKey() {
+  const [cfg, setCfg] = useState(null)
+  const [key, setKey] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [result, setResult] = useState(null)
+  useEffect(() => { nutri.getAdmin().then(setCfg).catch(() => {}) }, [])
+  if (!cfg) return null
+  const save = async value => {
+    setBusy(true); setResult(null)
+    try { setCfg(await nutri.putAdmin({ usdaKey: value })); setKey(''); toast(value ? nt('USDA key saved') : nt('USDA key removed')) } catch (e) { toast(e.message) }
+    setBusy(false)
+  }
+  const test = async () => {
+    setBusy(true); setResult(null)
+    try { setResult(await nutri.testUsda()) } catch (e) { setResult({ ok: false, error: e.message }) }
+    setBusy(false)
+  }
+  return <Section title={nt('USDA food search')} footer={nt('Food search always includes Open Food Facts. A free USDA FoodData Central key adds the USDA database (generic and branded foods).')}>
+    <div className="lrow nut-usda">
+      <span className="lrow-m">
+        <span className="lrow-t">{cfg.usdaKeySet ? nt('Key set ({0})', cfg.usdaKeyHint || '…') : nt('No key set')}</span>
+        <span className="lrow-s">{cfg.usdaKeySet ? nt('USDA search is on.') : nt('USDA search is off; Open Food Facts only.')}</span>
+      </span>
+    </div>
+    <div className="lrow nut-usda-row">
+      <input className="field" type="password" autoComplete="off" spellCheck="false" placeholder={nt('Paste your USDA API key')} value={key} onChange={e => setKey(e.target.value)} aria-label={nt('USDA API key')} />
+      <Button size="sm" onClick={() => save(key.trim())} disabled={busy || key.trim().length < 8}>{nt('Save')}</Button>
+    </div>
+    {cfg.usdaKeySet && <div className="lrow nut-usda-row">
+      <Button size="sm" onClick={test} disabled={busy}>{nt('Test key')}</Button>
+      <Button size="sm" variant="ghost" style={{ color: 'var(--red)' }} onClick={() => save('')} disabled={busy}>{nt('Remove key')}</Button>
+      {result && <span className="small" style={{ color: result.ok ? 'var(--green)' : 'var(--red)' }}>{result.ok ? nt('Works ({0} ms)', result.ms) : nt(result.error || 'Did not work')}</span>}
+    </div>}
+    <div className="lrow nut-usda-help"><span className="small muted">
+      {nt('Get a free key: open')} <a href="https://fdc.nal.usda.gov/api-key-signup" target="_blank" rel="noopener noreferrer">fdc.nal.usda.gov/api-key-signup</a>, {nt('enter your name and email, and the key is emailed to you within a minute. Paste it above. The free limit is 1,000 searches an hour.')}
+    </span></div>
+  </Section>
+}
+
 export default function Goals() {
   const nav = useNavigate()
   const user = useStore(s => s.user)
@@ -69,5 +110,6 @@ export default function Goals() {
       <Button variant="primary" onClick={save} disabled={busy}>{nt('Save goals')}</Button>
     </div>}
     {user?.admin && <Admin />}
+    {user?.admin && <UsdaKey />}
   </div>
 }

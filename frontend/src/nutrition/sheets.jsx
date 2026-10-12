@@ -1,14 +1,19 @@
 // The bottom sheets of the diary: add (quick or from a food), edit an entry, edit a food.
 // Opened through useUI().openSheet like every other sheet in the app; each takes `close` and
 // calls `onSaved` after the server has accepted the change, so the screen behind reloads.
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useUI } from '../store/useUI.js'
 import { Button, NumberField, SearchField, Segmented, SelectRow, Stepper, TextField } from '../components/ui.jsx'
 import Icon from '../components/Icon.jsx'
 import { confirmSheet } from '../sheets.jsx'
+import { useStore } from '../store/useStore.js'
+import { MOBILE } from '../lib/mobile.js'
+import { scanCode } from '../lib/scan.js'
+import BarcodeScanner from './BarcodeScanner.jsx'
 import { nt } from './i18n.js'
 import * as nutri from './api.js'
 import { MEALS, MEAL_LABEL, foodBody, macroLine, quickBody, scaleFood, trim } from './diary.js'
+import { SOURCE_LABEL, SOURCE_SHORT, barcodeOf, defaultBase, gramsOf, hitLine, qtyForGrams, scannerSupport, snapshotOf, sourceNotes } from './lookup.js'
 
 const toast = m => useUI.getState().toast(m)
 const fail = e => toast(e?.message || nt('Something went wrong'))
@@ -46,12 +51,48 @@ function QuickAdd({ date, meal, setMeal, onSaved, close }) {
   </>
 }
 
+/* One portion chooser for every kind of food: my own, a recent, a search hit, a scanned product.
+   `bases` are the ways the food can be measured; the amount is shown as servings AND, where the
+   base has a weight, as grams, and the two stay in step. */
+function Portion({ name, brand, bases, meal, onBack, onAdd, busy, tag }) {
+  const [bi, setBi] = useState(0)
+  const [qty, setQty] = useState(1)
+  const base = bases[bi]
+  const grams = gramsOf(base, qty)
+  const s = scaleFood({ per: base.per, serving: { grams: base.grams } }, qty)
+  const pickBase = i => {
+    const g = gramsOf(base, qty)
+    setBi(i)
+    setQty(g && bases[i].grams ? qtyForGrams(bases[i], g) || 1 : 1)
+  }
+  return <>
+    <button className="nut-back" onClick={onBack}><Icon name="chevronLeft" />{nt('Back')}</button>
+    <div className="nut-picked"><b>{name}</b>{brand && <span className="muted"> · {brand}</span>}{tag && <span className="tag nut-src">{tag}</span>}</div>
+    {bases.length > 1
+      ? <SelectRow title={nt('Portion')} sheetTitle={nt('Portion')} value={bi} onChange={pickBase} options={bases.map((b, i) => ({ value: i, label: b.label }))} />
+      : <div className="muted small">{nt('One serving: {0}', base.label)}</div>}
+    <div className="row between" style={{ margin: '12px 0 8px' }}>
+      <span>{nt('Servings')}</span>
+      <Stepper value={qty} step={base.grams === 100 ? 0.25 : 0.5} min={0.01} max={1000} onChange={setQty} ariaLabel={nt('Servings')} />
+    </div>
+    {grams != null && <label className="nut-datefield" style={{ marginTop: 0, marginBottom: 12 }}>
+      <span>{nt('Weight')}</span>
+      <span className="nut-input nut-cap"><NumberField value={grams} onChange={g => { const q = qtyForGrams(base, g); if (q) setQty(q) }} aria-label={nt('Weight in grams')} /><i>g</i></span>
+    </label>}
+    <div className="nut-preview"><b>{s.calories}</b> kcal<span className="muted"> · {macroLine(s)}</span></div>
+    <div style={{ height: 14 }} />
+    <Button variant="primary" onClick={() => onAdd(qty, base)} disabled={busy}>{nt('Add to {0}', nt(MEAL_LABEL[meal]).toLowerCase())}</Button>
+  </>
+}
+
+const basesOfFood = f => [{ label: f.serving.label, grams: f.serving.grams, per: f.per }]
+const tagOfFood = f => (f.source === 'off' || f.source === 'usda' ? SOURCE_SHORT[f.source] : null)
+
 function FoodPick({ date, meal, onSaved, close }) {
   const [scope, setScope] = useState('recent')
   const [text, setText] = useState('')
   const [foods, setFoods] = useState(null)
   const [picked, setPicked] = useState(null)
-  const [qty, setQty] = useState(1)
   const [busy, setBusy] = useState(false)
   const seq = useRef(0)
 
@@ -61,7 +102,7 @@ function FoodPick({ date, meal, onSaved, close }) {
   }
   useEffect(() => { const id = setTimeout(load, text ? 200 : 0); return () => clearTimeout(id) }, [scope, text])
 
-  const add = async () => {
+  const add = async qty => {
     setBusy(true)
     try {
       await nutri.addEntries({ date, meal, source: 'food', foodId: picked.id, qty })
@@ -69,21 +110,7 @@ function FoodPick({ date, meal, onSaved, close }) {
     } catch (e) { fail(e); setBusy(false) }
   }
 
-  if (picked) {
-    const s = scaleFood(picked, qty)
-    return <>
-      <button className="nut-back" onClick={() => setPicked(null)}><Icon name="chevronLeft" />{nt('Back')}</button>
-      <div className="nut-picked"><b>{picked.name}</b>{picked.brand && <span className="muted"> · {picked.brand}</span>}</div>
-      <div className="muted small">{nt('One serving: {0}', picked.serving.label)}</div>
-      <div className="row between" style={{ margin: '12px 0' }}>
-        <span>{nt('Servings')}</span>
-        <Stepper value={qty} step={0.5} min={0.25} max={100} onChange={setQty} ariaLabel={nt('Servings')} />
-      </div>
-      <div className="nut-preview"><b>{s.calories}</b> kcal<span className="muted"> · {macroLine(s)}{s.grams ? ` · ${trim(s.grams)} g` : ''}</span></div>
-      <div style={{ height: 14 }} />
-      <Button variant="primary" onClick={add} disabled={busy}>{nt('Add to {0}', nt(MEAL_LABEL[meal]).toLowerCase())}</Button>
-    </>
-  }
+  if (picked) return <Portion name={picked.name} brand={picked.brand} bases={basesOfFood(picked)} meal={meal} tag={tagOfFood(picked)} busy={busy} onBack={() => setPicked(null)} onAdd={add} />
 
   return <>
     <Segmented value={scope} onChange={setScope} options={[{ value: 'recent', label: nt('Recent') }, { value: 'favorite', label: nt('Favourites') }, { value: 'all', label: nt('All') }]} />
@@ -95,7 +122,7 @@ function FoodPick({ date, meal, onSaved, close }) {
         {scope === 'recent' ? nt('Foods you log appear here.') : nt('No foods yet.')}
         <div style={{ marginTop: 10 }}><Button size="sm" icon="plus" onClick={() => openFoodSheet({ onSaved: load })}>{nt('Create a food')}</Button></div>
       </div>}
-      {foods?.map(f => <button key={f.id} className="nut-pick" onClick={() => { setPicked(f); setQty(1) }}>
+      {foods?.map(f => <button key={f.id} className="nut-pick" onClick={() => setPicked(f)}>
         <span className="nut-pick-m"><span className="nut-pick-t">{f.name}</span><span className="nut-pick-s">{f.brand ? f.brand + ' · ' : ''}{f.serving.label} · {macroLine(f.per)}</span></span>
         <span className="nut-kcal">{f.per.calories}</span>
       </button>)}
@@ -103,16 +130,128 @@ function FoodPick({ date, meal, onSaved, close }) {
   </>
 }
 
+/* ------------------------------ search & barcode ------------------------------ */
+
+function Notes({ notes, onRetry }) {
+  return notes.map((n, i) => <div key={i} className={'nut-banner ' + n.tone}>
+    <Icon name={n.tone === 'warn' ? 'warning' : 'info'} /><span>{nt(n.text)}</span>
+    {n.retry && <button className="linkbtn" onClick={onRetry}>{nt('Try again')}</button>}
+  </div>)
+}
+
+function HitRow({ hit, onPick }) {
+  const b = defaultBase(hit)
+  return <button className="nut-pick" onClick={() => onPick(hit)}>
+    <span className="nut-pick-m"><span className="nut-pick-t">{hit.name}</span><span className="nut-pick-s">{hitLine(hit)} · {macroLine(b.per)}</span></span>
+    <span className="nut-pick-r"><span className="nut-kcal">{b.per.calories}</span><span className="tag nut-src">{SOURCE_SHORT[hit.source]}</span></span>
+  </button>
+}
+
+function SearchTab({ date, meal, onSaved, close }) {
+  const isAdmin = useStore(s => !!s.user?.admin)
+  const [text, setText] = useState('')
+  const [state, setState] = useState({ status: 'idle', data: null })
+  const [picked, setPicked] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const [scan, setScan] = useState(null)         // null | 'camera' | 'type'
+  const [support, setSupport] = useState('none')
+  const [code, setCode] = useState('')
+  const [bc, setBc] = useState(null)             // { status, result }
+  const seq = useRef(0)
+
+  useEffect(() => { let live = true; scannerSupport({ mobile: MOBILE }).then(s => live && setSupport(s)); return () => { live = false } }, [])
+
+  const run = query => {
+    const n = ++seq.current
+    setState(s => ({ status: 'loading', data: s.data }))
+    nutri.searchFoods(query)
+      .then(data => { if (n === seq.current) setState({ status: 'done', data }) })
+      .catch(e => { if (n === seq.current) setState({ status: 'error', data: null, error: e.status === 429 ? nt('Too many lookups — wait a moment and try again.') : e.message }) })
+  }
+  useEffect(() => {
+    const q = text.trim()
+    if (q.length < 2) { seq.current++; setState({ status: 'idle', data: null }); return }
+    const id = setTimeout(() => run(q), 450)
+    return () => clearTimeout(id)
+  }, [text])
+
+  const lookup = async raw => {
+    const c = barcodeOf(raw)
+    if (!c) { toast(nt('A barcode is 8 to 14 digits.')); return }
+    setScan(null); setBc({ status: 'loading' })
+    try { setBc({ status: 'done', result: await nutri.lookupBarcode(c), code: c }) }
+    catch (e) { setBc({ status: 'error', error: e.status === 429 ? nt('Too many lookups — wait a moment and try again.') : e.message, code: c }) }
+  }
+  const startScan = async () => {
+    if (support === 'native') {
+      try { const r = await scanCode(); if (r?.value) lookup(r.value) } catch { toast(nt('Could not open the scanner. Type the barcode instead.')); setScan('type') }
+    } else if (support === 'web') setScan('camera')
+    else setScan('type')
+  }
+  const onFound = useCallback(c => lookup(c), [])
+
+  const add = async (qty, base) => {
+    setBusy(true)
+    try {
+      await nutri.addEntries({ date, meal, source: 'food', qty, food: snapshotOf(picked, base) })
+      onSaved(); close(); toast(nt('Added'))
+    } catch (e) { fail(e); setBusy(false) }
+  }
+
+  if (picked) return <Portion name={picked.name} brand={picked.brand} bases={picked.bases} meal={meal} tag={SOURCE_LABEL[picked.source]} busy={busy} onBack={() => setPicked(null)} onAdd={add} />
+
+  if (scan === 'camera') return <BarcodeScanner onFound={onFound} onCancel={() => setScan(null)} />
+
+  const notes = sourceNotes(state.data?.sources, { admin: isAdmin })
+  const r = bc?.result
+  return <>
+    <div className="row" style={{ gap: 8 }}>
+      <div style={{ flex: 1 }}><SearchField value={text} onChange={e => setText(e.target.value)} onClear={() => setText('')} placeholder={nt('Search foods')} onKeyDown={e => { if (e.key === 'Enter' && text.trim().length >= 2) run(text.trim()) }} /></div>
+      <button className="iconbtn" onClick={startScan} aria-label={nt('Scan a barcode')}><Icon name="qr" /></button>
+    </div>
+    {scan === 'type' && <div className="nut-barcode">
+      {support === 'none' && <div className="muted small" style={{ marginBottom: 6 }}>{nt("This browser can't scan barcodes with the camera. Type the number printed under the barcode.")}</div>}
+      <div className="row" style={{ gap: 8 }}>
+        <input className="field" inputMode="numeric" placeholder={nt('Barcode number')} value={code} maxLength={20} onChange={e => setCode(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') lookup(code) }} aria-label={nt('Barcode number')} />
+        <Button onClick={() => lookup(code)}>{nt('Look up')}</Button>
+      </div>
+    </div>}
+    {scan !== 'type' && support === 'none' && !bc && <button className="linkbtn nut-typelink" onClick={() => setScan('type')}>{nt('Enter a barcode by hand')}</button>}
+
+    {bc?.status === 'loading' && <div className="muted small nut-empty">{nt('Looking up the barcode…')}</div>}
+    {bc?.status === 'error' && <div className="nut-banner warn"><Icon name="warning" /><span>{bc.error}</span><button className="linkbtn" onClick={() => lookup(bc.code)}>{nt('Try again')}</button></div>}
+    {r?.found && <div className="nut-pick-list"><HitRow hit={r.product} onPick={setPicked} /></div>}
+    {r && !r.found && <div className="nut-banner info">
+      <Icon name="info" />
+      <span>{r.reason === 'error' ? nt(r.error) : r.reason === 'no-nutrition' ? nt('“{0}” is in Open Food Facts but has no nutrition data.', r.name) : nt('Barcode {0} is not in Open Food Facts.', bc.code)}</span>
+      {r.reason === 'error'
+        ? <button className="linkbtn" onClick={() => lookup(bc.code)}>{nt('Try again')}</button>
+        : <button className="linkbtn" onClick={() => openFoodSheet({ prefill: { name: r.name || '', ext: bc.code }, onSaved: () => { onSaved(); close() } })}>{nt('Add it as my food')}</button>}
+    </div>}
+
+    {state.status === 'loading' && !state.data && <div className="muted small nut-empty">{nt('Searching…')}</div>}
+    {state.status === 'error' && <div className="nut-banner warn"><Icon name="warning" /><span>{state.error}</span><button className="linkbtn" onClick={() => run(text.trim())}>{nt('Try again')}</button></div>}
+    {state.data && <Notes notes={notes} onRetry={() => run(text.trim())} />}
+    {state.data && <div className={'nut-pick-list' + (state.status === 'loading' ? ' stale' : '')}>
+      {state.data.results.length === 0 && state.status !== 'error' && <div className="muted small nut-empty">{nt('Nothing found for “{0}”.', state.data.q)}</div>}
+      {state.data.results.map(h => <HitRow key={h.source + h.ext} hit={h} onPick={setPicked} />)}
+    </div>}
+    {state.status === 'idle' && !bc && <div className="muted small nut-empty">{nt('Search Open Food Facts and USDA, or scan a barcode.')}</div>}
+  </>
+}
+
 function AddSheet({ date, meal: initial, onSaved, close }) {
   const [meal, setMeal] = useState(initial)
-  const [tab, setTab] = useState('quick')
+  const [tab, setTab] = useState('search')
   return <>
     <h3>{nt('Add food')}</h3>
     <SelectRow title={nt('Meal')} sheetTitle={nt('Meal')} value={meal} onChange={setMeal} options={mealOptions()} />
     <div style={{ height: 10 }} />
-    <Segmented value={tab} onChange={setTab} options={[{ value: 'quick', label: nt('Quick add') }, { value: 'foods', label: nt('My foods') }]} />
+    <Segmented value={tab} onChange={setTab} options={[{ value: 'search', label: nt('Search') }, { value: 'foods', label: nt('My foods') }, { value: 'quick', label: nt('Quick add') }]} />
     <div style={{ height: 12 }} />
-    {tab === 'quick' ? <QuickAdd date={date} meal={meal} onSaved={onSaved} close={close} /> : <FoodPick date={date} meal={meal} onSaved={onSaved} close={close} />}
+    {tab === 'quick' ? <QuickAdd date={date} meal={meal} onSaved={onSaved} close={close} />
+      : tab === 'foods' ? <FoodPick date={date} meal={meal} onSaved={onSaved} close={close} />
+      : <SearchTab date={date} meal={meal} onSaved={onSaved} close={close} />}
     <div style={{ height: 8 }} />
     <Button variant="ghost" className="dim" onClick={close}>{nt('Cancel')}</Button>
   </>
@@ -167,14 +306,14 @@ export const openEditEntry = props => useUI.getState().openSheet(close => <EditE
 
 /* ------------------------------ a custom food ------------------------------ */
 
-function FoodSheet({ food, onSaved, close }) {
+function FoodSheet({ food, prefill, onSaved, close }) {
   const readOnly = !!food && food.source !== 'custom'
-  const [f, setF] = useState({ name: food?.name || '', brand: food?.brand || '', serving: food?.serving?.label || '', grams: food?.serving?.grams ?? null })
+  const [f, setF] = useState({ name: food?.name || prefill?.name || '', brand: food?.brand || '', serving: food?.serving?.label || '', grams: food?.serving?.grams ?? null })
   const [m, setM] = useState({ calories: food?.per.calories ?? null, protein_g: food?.per.protein_g ?? null, carbs_g: food?.per.carbs_g ?? null, fat_g: food?.per.fat_g ?? null })
   const [busy, setBusy] = useState(false)
 
   const save = async () => {
-    const r = foodBody({ ...f, ...m, ext: food?.ext })
+    const r = foodBody({ ...f, ...m, ext: food?.ext ?? prefill?.ext })
     if (!r.ok) { toast(nt(r.error)); return }
     setBusy(true)
     try {
