@@ -13,12 +13,13 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true
 const m = vi.hoisted(() => ({
   user: { id: 'u1', name: 'Me', admin: false },
   sheets: [],
+  downscale: vi.fn(),
   toast: vi.fn(),
   confirm: vi.fn(),
   api: {
     getDay: vi.fn(), getConfig: vi.fn(), addEntries: vi.fn(), updateEntry: vi.fn(), deleteEntry: vi.fn(),
     listFoods: vi.fn(), createFood: vi.fn(), updateFood: vi.fn(), deleteFood: vi.fn(), getGoals: vi.fn(), putGoals: vi.fn(),
-    getAdmin: vi.fn(), putAdmin: vi.fn(), getRange: vi.fn(), searchFoods: vi.fn(), lookupBarcode: vi.fn(), testUsda: vi.fn()
+    getAdmin: vi.fn(), putAdmin: vi.fn(), getRange: vi.fn(), searchFoods: vi.fn(), lookupBarcode: vi.fn(), testUsda: vi.fn(), analyze: vi.fn()
   }
 }))
 
@@ -39,6 +40,7 @@ vi.mock('../store/useUI.js', () => {
 })
 vi.mock('../sheets.jsx', () => ({ confirmSheet: (...a) => m.confirm(...a) }))
 vi.mock('./api.js', () => m.api)
+vi.mock('./image.js', () => ({ downscaleToJpeg: (...a) => m.downscale(...a) }))
 
 const { default: Diary } = await import('./Diary.jsx')
 const { default: NutritionHomeCard } = await import('./HomeCard.jsx')
@@ -99,8 +101,10 @@ beforeEach(() => {
   shown = []
   m.user = { id: 'u1', name: 'Me', admin: false }
   for (const f of Object.values(m.api)) f.mockReset()
-  m.toast.mockReset(); m.confirm.mockReset()
+  m.toast.mockReset(); m.confirm.mockReset(); m.downscale.mockReset()
+  globalThis.URL.revokeObjectURL = globalThis.URL.revokeObjectURL || (() => {})
   m.api.getDay.mockResolvedValue(dayOf())
+  m.api.getConfig.mockResolvedValue({ ai: { limit: 30, used: 3, remaining: 27, available: true, reason: null } })
 })
 afterEach(() => { act(() => root.unmount()); host.remove() })
 
@@ -418,6 +422,223 @@ describe('search, portions and barcodes', () => {
     expect(s.el.textContent).toContain('Open Food Facts is not answering right now')
     await click(byText('button', 'Try again'))
     expect(s.el.textContent).toContain('Nutella')
+  })
+})
+
+const DRAFT = { name: 'Eggs on toast', confidence: 'medium', notFood: false, notes: 'oil is a guess', warnings: [],
+  items: [
+    { name: 'Fried egg', portion: '2 large', grams: 100, calories: 180, protein_g: 12.5, carbs_g: 1, fat_g: 14 },
+    { name: 'Toast', portion: '1 slice', grams: null, calories: 80, protein_g: 3, carbs_g: 14, fat_g: 1 }
+  ] }
+const AI = { limit: 30, used: 4, remaining: 26 }
+const apiError = (message, status, data, code) => Object.assign(new Error(message), { status, data, ...(code ? { code } : {}) })
+
+describe('AI logging', () => {
+  async function open(onSaved = vi.fn()) {
+    openAddSheet({ date: '2026-10-12', meal: 'lunch', onSaved })
+    const s = await showSheet()
+    return { s, onSaved }
+  }
+  const describeIt = async (s, text = 'two eggs and toast') => {
+    await click(byText('button', 'Describe'))
+    await setValue(s.el.querySelector('textarea'), text)
+  }
+
+  it('Photo and Describe sit above the tabs with today’s allowance', async () => {
+    const { s } = await open()
+    expect(byText('button', 'Photo')).toBeTruthy()
+    expect(byText('button', 'Describe')).toBeTruthy()
+    expect(s.el.textContent).toContain('27 of 30 AI analyses left today')
+  })
+
+  it('the buttons are off, with the reason, when the AI cannot run or today’s limit is used', async () => {
+    m.api.getConfig.mockResolvedValue({ ai: { limit: 30, used: 0, remaining: 30, available: false, reason: 'unavailable' } })
+    const { s } = await open()
+    expect(byText('button', 'Photo').disabled).toBe(true)
+    expect(s.el.textContent).toContain('Coach switched on and connected to Claude')
+    act(() => root.unmount()); root = createRoot(host)
+    m.api.getConfig.mockResolvedValue({ ai: { limit: 30, used: 30, remaining: 0, available: true, reason: null } })
+    const second = await open()
+    expect(byText('button', 'Describe').disabled).toBe(true)
+    expect(second.s.el.textContent).toContain('used all of today’s AI analyses')
+    expect(byText('button', 'Search'), 'manual logging is still there').toBeTruthy()
+  })
+
+  it('Describe → estimate → editable review; NOTHING is saved until Save, then the edits are what is saved', async () => {
+    m.api.analyze.mockResolvedValue({ draft: DRAFT, ai: AI, ms: 5000, calls: 1 })
+    m.api.addEntries.mockResolvedValue({})
+    const { s, onSaved } = await open()
+    await describeIt(s)
+    await click(byText('button', 'Estimate calories & macros'))
+    expect(m.api.analyze).toHaveBeenCalledWith({ kind: 'text', text: 'two eggs and toast' })
+    expect(s.el.textContent).toContain('Check the estimate')
+    expect(s.el.textContent).toContain('Medium confidence')
+    expect(s.el.textContent).toContain('oil is a guess')
+    expect(s.el.textContent).toContain('260')
+    expect(m.api.addEntries).not.toHaveBeenCalled()
+
+    // fix the egg's calories: first item's first number box
+    const items = s.el.querySelectorAll('.nut-item')
+    await setValue(items[0].querySelectorAll('.nut-fields')[1].querySelector('input'), '200')
+    expect(s.el.textContent).toContain('280')
+    expect(m.api.addEntries).not.toHaveBeenCalled()
+    await click(byText('button', 'Save to diary'))
+    expect(m.api.addEntries).toHaveBeenCalledTimes(1)
+    const body = m.api.addEntries.mock.calls[0][0]
+    expect(body).toMatchObject({ date: '2026-10-12', meal: 'lunch' })
+    expect(body.entries.map(e => [e.name, e.calories, e.source, e.confidence])).toEqual([['Fried egg', 200, 'ai', 'medium'], ['Toast', 80, 'ai', 'medium']])
+    expect(onSaved).toHaveBeenCalled(); expect(s.close).toHaveBeenCalled()
+  })
+
+  it('review: remove an item, refuse an unnamed one, show the validator’s warnings', async () => {
+    m.api.analyze.mockResolvedValue({ draft: { ...DRAFT, warnings: ['Toast: macros imply about 400 kcal, estimate says 80'] }, ai: AI })
+    const { s } = await open()
+    await describeIt(s)
+    await click(byText('button', 'Estimate calories & macros'))
+    expect(s.el.textContent).toContain('macros imply about 400 kcal')
+    await click(s.el.querySelectorAll('[aria-label="Remove this item"]')[1])
+    expect(s.el.querySelectorAll('.nut-item')).toHaveLength(1)
+    await setValue(s.el.querySelector('.nut-item input'), '  ')
+    await click(byText('button', 'Save to diary'))
+    expect(m.toast).toHaveBeenCalledWith('Item 1 needs a name.')
+    expect(m.api.addEntries).not.toHaveBeenCalled()
+  })
+
+  it('Discard leaves nothing behind; with edits it asks first', async () => {
+    m.api.analyze.mockResolvedValue({ draft: DRAFT, ai: AI })
+    const { s } = await open()
+    await describeIt(s)
+    await click(byText('button', 'Estimate calories & macros'))
+    await click(byText('button', 'Discard'))
+    expect(m.api.addEntries).not.toHaveBeenCalled()
+    expect(s.el.textContent).toContain('Add food')   // back on the add sheet
+
+    await describeIt(s)
+    await click(byText('button', 'Estimate calories & macros'))
+    await setValue(s.el.querySelector('.nut-item input'), 'Changed')
+    await click(byText('button', 'Discard'))
+    expect(m.confirm).toHaveBeenCalled()
+    expect(s.el.textContent).toContain('Check the estimate')   // still editing until confirmed
+    await act(async () => { m.confirm.mock.calls[0][0].onConfirm() }); await flush()
+    expect(s.el.textContent).toContain('Add food')
+    expect(m.api.addEntries).not.toHaveBeenCalled()
+  })
+
+  it('Photo: choose a file, it is shrunk on the device, then sent with the note — and only then', async () => {
+    m.downscale.mockResolvedValue({ base64: 'QUJD', bytes: 1234, width: 1280, height: 960, previewUrl: 'blob:p' })
+    m.api.analyze.mockResolvedValue({ draft: DRAFT, ai: AI })
+    const { s } = await open()
+    await click(byText('button', 'Photo'))
+    expect(byText('button', 'Estimate calories & macros').disabled).toBe(true)
+    const file = new File(['x'], 'meal.heic', { type: 'image/heic' })
+    const input = s.el.querySelectorAll('input[type="file"]')[1]
+    Object.defineProperty(input, 'files', { value: [file], configurable: true })
+    await act(async () => { input.dispatchEvent(new Event('change', { bubbles: true })) }); await flush()
+    expect(m.downscale).toHaveBeenCalledWith(file)
+    expect(m.api.analyze).not.toHaveBeenCalled()
+    expect(s.el.querySelector('img').src).toContain('blob:p')
+    await setValue(s.el.querySelector('input[placeholder^="Anything"]'), 'no oil')
+    await click(byText('button', 'Estimate calories & macros'))
+    expect(m.api.analyze).toHaveBeenCalledWith({ kind: 'photo', image: 'QUJD', note: 'no oil' })
+    expect(s.el.textContent).toContain('Check the estimate')
+  })
+
+  it('a photo the browser cannot read says so and offers manual entry', async () => {
+    m.downscale.mockRejectedValue(new Error('Could not read this photo. Try a JPEG or PNG.'))
+    const { s } = await open()
+    await click(byText('button', 'Photo'))
+    const input = s.el.querySelectorAll('input[type="file"]')[0]
+    Object.defineProperty(input, 'files', { value: [new File(['x'], 'a.heic')], configurable: true })
+    await act(async () => { input.dispatchEvent(new Event('change', { bubbles: true })) }); await flush()
+    expect(s.el.textContent).toContain('Could not read this photo')
+    expect(byText('button', 'Log it by hand')).toBeTruthy()
+  })
+
+  it('the daily limit: the message, the new allowance, and no retry — only manual entry, with your words carried over', async () => {
+    m.api.analyze.mockRejectedValue(apiError('You have used all of today’s AI analyses.', 429, { code: 'cap', ai: { limit: 30, used: 30, remaining: 0 } }))
+    const { s } = await open()
+    await describeIt(s, 'big bowl of oats')
+    await click(byText('button', 'Estimate calories & macros'))
+    expect(s.el.textContent).toContain('used all of today’s AI analyses')
+    expect(s.el.textContent).toContain('0 of 30 AI analyses left today')
+    expect(byText('button', 'Try again')).toBeUndefined()
+    await click(byText('button', 'Log it by hand'))
+    expect(s.el.querySelector('input[placeholder="Name (optional)"]').value).toBe('big bowl of oats')
+    expect(byText('button', 'Photo').disabled).toBe(true)
+  })
+
+  it('a timeout offers Try again, Describe instead (for a photo) and manual entry', async () => {
+    m.downscale.mockResolvedValue({ base64: 'QUJD', bytes: 1, width: 1, height: 1, previewUrl: 'blob:p' })
+    m.api.analyze.mockRejectedValueOnce(apiError('The AI took too long. Try again, or log by hand.', 504, { code: 'timeout', ai: { limit: 30, used: 5, remaining: 25 } }))
+      .mockResolvedValue({ draft: DRAFT, ai: AI })
+    const { s } = await open()
+    await click(byText('button', 'Photo'))
+    const input = s.el.querySelectorAll('input[type="file"]')[1]
+    Object.defineProperty(input, 'files', { value: [new File(['x'], 'a.jpg')], configurable: true })
+    await act(async () => { input.dispatchEvent(new Event('change', { bubbles: true })) }); await flush()
+    await setValue(s.el.querySelector('input[placeholder^="Anything"]'), 'two slices')
+    await click(byText('button', 'Estimate calories & macros'))
+    expect(s.el.textContent).toContain('took too long')
+    expect(byText('button', 'Describe it instead')).toBeTruthy()
+    await click(byText('button', 'Try again'))
+    expect(m.api.analyze).toHaveBeenCalledTimes(2)
+    expect(s.el.textContent).toContain('Check the estimate')
+  })
+
+  it('"Describe it instead" moves the photo note into the text box', async () => {
+    m.downscale.mockResolvedValue({ base64: 'QUJD', bytes: 1, width: 1, height: 1, previewUrl: 'blob:p' })
+    m.api.analyze.mockRejectedValue(apiError('The AI could not answer right now.', 502, { code: 'provider' }))
+    const { s } = await open()
+    await click(byText('button', 'Photo'))
+    const input = s.el.querySelectorAll('input[type="file"]')[1]
+    Object.defineProperty(input, 'files', { value: [new File(['x'], 'a.jpg')], configurable: true })
+    await act(async () => { input.dispatchEvent(new Event('change', { bubbles: true })) }); await flush()
+    await setValue(s.el.querySelector('input[placeholder^="Anything"]'), 'chicken wrap')
+    await click(byText('button', 'Estimate calories & macros'))
+    await click(byText('button', 'Describe it instead'))
+    expect(s.el.querySelector('textarea').value).toBe('chicken wrap')
+  })
+
+  it('auth and unavailable errors offer no retry, only manual entry', async () => {
+    for (const [code, text] of [['auth', 'The AI account on this server needs reconnecting (Admin → Coach).'], ['unavailable', 'AI logging is not available on this server.']]) {
+      act(() => root.unmount()); root = createRoot(host); m.api.analyze.mockReset()
+      m.api.analyze.mockRejectedValue(apiError(text, 502, { code, ai: AI }))
+      const { s } = await open()
+      await describeIt(s)
+      await click(byText('button', 'Estimate calories & macros'))
+      expect(s.el.textContent).toContain(text)
+      expect(byText('button', 'Try again'), code).toBeUndefined()
+      expect(byText('button', 'Log it by hand'), code).toBeTruthy()
+    }
+  })
+
+  it('the client giving up before the server answers says the analysis may still count', async () => {
+    m.api.analyze.mockRejectedValue(apiError('The server did not answer in time.', undefined, undefined, 'timeout'))
+    const { s } = await open()
+    await describeIt(s)
+    await click(byText('button', 'Estimate calories & macros'))
+    expect(s.el.textContent).toContain('may still finish on the server and count')
+    expect(byText('button', 'Try again')).toBeTruthy()
+  })
+
+  it('"not food" is its own answer, with a way to try again or log by hand', async () => {
+    m.api.analyze.mockResolvedValue({ draft: { name: '', confidence: 'low', notFood: true, notes: 'a cat on a sofa', items: [], warnings: [] }, ai: AI })
+    const { s } = await open()
+    await describeIt(s)
+    await click(byText('button', 'Estimate calories & macros'))
+    expect(s.el.textContent).toContain('does not look like food')
+    expect(s.el.textContent).toContain('a cat on a sofa')
+    expect(byText('button', 'Save to diary')).toBeUndefined()
+    expect(byText('button', 'Try another')).toBeTruthy()
+  })
+
+  it('"Log it by hand instead" is on the very first screen of the AI flow', async () => {
+    const { s } = await open()
+    await click(byText('button', 'Describe'))
+    await setValue(s.el.querySelector('textarea'), 'soup')
+    await click(byText('button', 'Log it by hand instead'))
+    expect(s.el.querySelector('input[placeholder="Name (optional)"]').value).toBe('soup')
+    expect(m.api.analyze).not.toHaveBeenCalled()
   })
 })
 

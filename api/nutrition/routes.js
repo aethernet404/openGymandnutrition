@@ -10,11 +10,12 @@ import * as store from './store.js';
 import * as v from './validate.js';
 import { createLookup, cleanBarcode } from './lookup.js';
 import { createWindow } from '../rate-limit.js';
+import { createAnalyzer, availability, checkInput, FAILURES } from './analyze.js';
 
 const URL_BASE = 'http://x';
 const query = req => new URL(req.url, URL_BASE).searchParams;
 
-export function nutritionRoutes({ json, readBody, readSession, requireAdmin, lookup = createLookup() }) {
+export function nutritionRoutes({ json, readBody, readSession, requireAdmin, lookup = createLookup(), analyzer = createAnalyzer() }) {
   // Lookups go out to third parties from this server's address, so they are budgeted per profile.
   const lookups = createWindow({ max: 40, windowMs: 60000 });
   const throttled = (res, user) => {
@@ -44,6 +45,18 @@ export function nutritionRoutes({ json, readBody, readSession, requireAdmin, loo
     }
   };
 
+  /** Today's allowance for a profile, as the app shows it. */
+  const allowance = uid => {
+    const limit = cfg.load().aiDailyCap;
+    const used = store.aiUsed(store.read(uid));
+    return { limit, used, remaining: Math.max(0, limit - used) };
+  };
+  const aiFail = (res, code, uid, detail) => {
+    const f = FAILURES[code] || FAILURES.provider;
+    if (detail && code !== 'cap') console.error('nutrition: AI analysis failed:', code, String(detail).slice(0, 200));
+    json(res, f.status, { error: f.text, code, ai: allowance(uid) });
+  };
+
   const dateOf = (res, s) => { const r = v.dateParam(s); if (!r.ok) { invalid(res, r); return null; } return r.value; };
 
   /** Fill macros from a food × qty when the client sent a foodId and no numbers. */
@@ -68,7 +81,11 @@ export function nutritionRoutes({ json, readBody, readSession, requireAdmin, loo
       const c = cfg.load();
       const d = store.read(user.id);
       const used = store.aiUsed(d);
-      json(res, 200, { ai: { limit: c.aiDailyCap, used, remaining: Math.max(0, c.aiDailyCap - used) }, lookup: { off: true, usda: c.usdaKeySet }, meals: v.MEALS });
+      const avail = availability(user.id);
+      json(res, 200, {
+        ai: { limit: c.aiDailyCap, used, remaining: Math.max(0, c.aiDailyCap - used), available: avail.ok && c.aiDailyCap > 0, reason: c.aiDailyCap === 0 ? 'off' : avail.ok ? null : avail.code },
+        lookup: { off: true, usda: c.usdaKeySet }, meals: v.MEALS
+      });
     }),
 
     'GET /api/nutrition/day': guarded(async (req, res, user) => {
@@ -214,6 +231,27 @@ export function nutritionRoutes({ json, readBody, readSession, requireAdmin, loo
       if (!code) return fail(res, 400, 'a barcode is 8 to 14 digits');
       if (throttled(res, user)) return;
       json(res, 200, { code, ...(await lookup.barcode(code)) });
+    }),
+
+    /* ----- AI logging: a draft only. Nothing is saved until the person confirms it (POST /entries) ----- */
+
+    'POST /api/nutrition/analyze': guarded(async (req, res, user) => {
+      const input = checkInput(await readBody(req));
+      if (!input.ok) return fail(res, 400, input.error);
+      const limit = cfg.load().aiDailyCap;
+      if (limit === 0) return json(res, 403, { error: 'AI logging is switched off by an admin.', code: 'ai-off', ai: allowance(user.id) });
+      const avail = availability(user.id);
+      if (!avail.ok) return aiFail(res, avail.code, user.id);
+      const slot = await store.reserveAi(user.id, limit);
+      if (!slot.ok) return aiFail(res, 'cap', user.id);
+      let result;
+      try { result = await analyzer.analyze(user.id, input); }
+      catch (e) { await store.refundAi(user.id); throw e; }
+      if (!result.ok) {
+        if (result.refund) await store.refundAi(user.id);
+        return aiFail(res, result.code, user.id, result.detail);
+      }
+      json(res, 200, { draft: result.draft, ms: result.ms, calls: result.calls, ai: allowance(user.id) });
     }),
 
     'GET /api/nutrition/goals': guarded(async (req, res, user) => {

@@ -94,3 +94,22 @@
 .nut-usda-row .field{flex:1;min-width:140px;background:var(--surface-2)}
 .nut-usda-help{display:block}
 .nut-usda-help a{color:var(--acc);word-break:break-all}
+
+/* ---- AI logging ---- */
+.nut-ai-row{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:12px 0 6px}
+.nut-ai-why{color:var(--label-2);margin:0 2px 10px}
+.nut-ai-why.off{color:var(--orange)}
+.nut-photo{border-radius:14px;overflow:hidden;background:var(--surface-2);aspect-ratio:4/3;display:flex;align-items:center;justify-content:center;color:var(--label-3);font-size:40px}
+.nut-photo.empty{font-size:15px}
+.nut-photo img{width:100%;height:100%;object-fit:cover}
+.nut-busy{display:flex;flex-direction:column;align-items:center;gap:6px;padding:28px 0 20px}
+.nut-spinner{width:30px;height:30px;border-radius:50%;border:3px solid var(--surface-3);border-top-color:var(--acc);animation:nutspin .8s linear infinite}
+@keyframes nutspin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.nut-spinner{animation-duration:2.4s}}
+.nut-item{padding:12px;margin:10px 0;border-radius:14px;background:var(--surface-2)}
+.nut-item .nut-input{background:var(--surface)}
+.nut-item .field{background:var(--surface)}
+.nut-conf-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:4px 2px 4px}
+.nut-conf.low{color:var(--orange)}
+.nut-conf.medium{color:var(--label-2)}
+.nut-conf.high{color:var(--green)}

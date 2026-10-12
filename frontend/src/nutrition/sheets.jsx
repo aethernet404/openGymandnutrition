@@ -10,6 +10,8 @@ import { useStore } from '../store/useStore.js'
 import { MOBILE } from '../lib/mobile.js'
 import { scanCode } from '../lib/scan.js'
 import BarcodeScanner from './BarcodeScanner.jsx'
+import AiLog from './AiLog.jsx'
+import { allowanceText, unavailableText } from './ai.js'
 import { nt } from './i18n.js'
 import * as nutri from './api.js'
 import { MEALS, MEAL_LABEL, foodBody, macroLine, quickBody, scaleFood, trim } from './diary.js'
@@ -32,8 +34,8 @@ export function MacroFields({ v, set, disabled, caloriesLabel = 'Calories' }) {
 
 /* ------------------------------ add to a meal ------------------------------ */
 
-function QuickAdd({ date, meal, setMeal, onSaved, close }) {
-  const [name, setName] = useState('')
+function QuickAdd({ date, meal, initialName = '', onSaved, close }) {
+  const [name, setName] = useState(initialName)
   const [m, setM] = useState({ calories: null, protein_g: null, carbs_g: null, fat_g: null })
   const [busy, setBusy] = useState(false)
   const save = async () => {
@@ -243,13 +245,28 @@ function SearchTab({ date, meal, onSaved, close }) {
 function AddSheet({ date, meal: initial, onSaved, close }) {
   const [meal, setMeal] = useState(initial)
   const [tab, setTab] = useState('search')
+  const [ai, setAi] = useState(null)               // GET /config's ai block: allowance and availability
+  const [aiMode, setAiMode] = useState(null)       // null | 'photo' | 'text'
+  const [carry, setCarry] = useState('')           // what the person typed before the AI failed
+  useEffect(() => { let live = true; nutri.getConfig().then(c => live && setAi(c.ai)).catch(() => {}); return () => { live = false } }, [])
+
+  if (aiMode) return <AiLog mode={aiMode} date={date} meal={meal} ai={ai} onAi={a => setAi(x => ({ ...x, ...a }))}
+    onBack={() => setAiMode(null)} onSaved={onSaved} close={close}
+    onManual={name => { setCarry(name || ''); setAiMode(null); setTab('quick') }} />
+
+  const blocked = ai && (!ai.available || ai.remaining <= 0)
+  const why = !ai ? '' : !ai.available ? unavailableText(ai.reason) : ai.remaining <= 0 ? 'You have used all of today’s AI analyses.' : allowanceText(ai)
   return <>
     <h3>{nt('Add food')}</h3>
     <SelectRow title={nt('Meal')} sheetTitle={nt('Meal')} value={meal} onChange={setMeal} options={mealOptions()} />
-    <div style={{ height: 10 }} />
+    <div className="nut-ai-row">
+      <Button icon="camera" variant="tinted" onClick={() => setAiMode('photo')} disabled={blocked}>{nt('Photo')}</Button>
+      <Button icon="sparkles" variant="tinted" onClick={() => setAiMode('text')} disabled={blocked}>{nt('Describe')}</Button>
+    </div>
+    {why && <div className={'small nut-ai-why' + (blocked ? ' off' : '')}>{nt(why)}</div>}
     <Segmented value={tab} onChange={setTab} options={[{ value: 'search', label: nt('Search') }, { value: 'foods', label: nt('My foods') }, { value: 'quick', label: nt('Quick add') }]} />
     <div style={{ height: 12 }} />
-    {tab === 'quick' ? <QuickAdd date={date} meal={meal} onSaved={onSaved} close={close} />
+    {tab === 'quick' ? <QuickAdd date={date} meal={meal} initialName={carry} onSaved={onSaved} close={close} />
       : tab === 'foods' ? <FoodPick date={date} meal={meal} onSaved={onSaved} close={close} />
       : <SearchTab date={date} meal={meal} onSaved={onSaved} close={close} />}
     <div style={{ height: 8 }} />

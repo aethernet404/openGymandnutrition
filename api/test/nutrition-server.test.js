@@ -199,3 +199,25 @@ test('search and barcode through the real server: no USDA key, a bad key, a good
 
   assert.equal(h.log.split('\n').filter(l => /^\s+at /.test(l)).length, 0, 'no stack traces in the server log');
 });
+
+test('AI logging through the real server: guarded, validated, and honest when the Coach is not set up', async t => {
+  const h = await boot(t);
+  const jpeg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(64, 1)]).toString('base64');
+
+  assert.equal((await h.call('POST', '/api/nutrition/analyze', null, { kind: 'text', text: 'two eggs' })).status, 401);
+  assert.equal((await h.call('POST', '/api/nutrition/analyze', USER, { kind: 'photo', image: 'not base64!' })).status, 400);
+  assert.equal((await h.call('POST', '/api/nutrition/analyze', USER, { kind: 'video' })).status, 400);
+
+  // Coach not enabled on this fresh instance: a clear 503 with a code the app words, and no charge.
+  const r = await h.call('POST', '/api/nutrition/analyze', USER, { kind: 'photo', image: jpeg });
+  assert.deepEqual([r.status, r.body.code], [503, 'unavailable']);
+  assert.match(r.body.error, /Coach must be switched on/);
+  assert.deepEqual(r.body.ai, { limit: 30, used: 0, remaining: 30 });
+  const cfg = await h.call('GET', '/api/nutrition/config', USER);
+  assert.deepEqual([cfg.body.ai.available, cfg.body.ai.reason], [false, 'unavailable']);
+
+  // The 5 MB body limit applies to photos too: an oversized upload is refused cleanly.
+  const big = await fetch(h.api + '/api/nutrition/analyze', { method: 'POST', headers: as(USER), body: JSON.stringify({ kind: 'photo', image: 'A'.repeat(6 * 1024 * 1024) }) });
+  assert.equal(big.status, 413);
+  assert.equal(h.log.split('\n').filter(l => /^\s+at /.test(l)).length, 0);
+});
