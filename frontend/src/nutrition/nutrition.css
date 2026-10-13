@@ -113,3 +113,11 @@
 .nut-conf.low{color:var(--orange)}
 .nut-conf.medium{color:var(--label-2)}
 .nut-conf.high{color:var(--green)}
+
+/* ---- barcode photo scan ---- */
+.nut-scan{margin-top:12px;padding:12px;border-radius:14px;background:var(--surface-2)}
+.nut-scan .nut-barcode{margin-top:14px}
+.nut-scan .nut-barcode .field{background:var(--surface)}
+.nut-livewhy{margin:8px 2px 0}
+.nut-scan .nut-banner{background:var(--surface)}
+.iconbtn.on{color:var(--acc)}

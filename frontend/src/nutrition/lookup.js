@@ -48,15 +48,3 @@ export function hitLine(hit) {
   const b = defaultBase(hit)
   return [hit.brand, b.label].filter(Boolean).join(' · ')
 }
-
-/** Which camera path this browser/app has. Async because BarcodeDetector reports formats lazily. */
-export async function scannerSupport({ mobile = false, nav = globalThis.navigator, Detector = globalThis.BarcodeDetector } = {}) {
-  if (mobile) return 'native'
-  if (!nav?.mediaDevices?.getUserMedia || typeof Detector !== 'function') return 'none'
-  try {
-    const formats = typeof Detector.getSupportedFormats === 'function' ? await Detector.getSupportedFormats() : []
-    const wanted = SCAN_FORMATS.filter(f => formats.includes(f))
-    return wanted.length ? 'web' : 'none'
-  } catch { return 'none' }
-}
-export const SCAN_FORMATS = ['ean_13', 'ean_8', 'upc_a', 'upc_e']

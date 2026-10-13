@@ -15,7 +15,8 @@ import { allowanceText, unavailableText } from './ai.js'
 import { nt } from './i18n.js'
 import * as nutri from './api.js'
 import { MEALS, MEAL_LABEL, foodBody, macroLine, quickBody, scaleFood, trim } from './diary.js'
-import { SOURCE_LABEL, SOURCE_SHORT, barcodeOf, defaultBase, gramsOf, hitLine, qtyForGrams, scannerSupport, snapshotOf, sourceNotes } from './lookup.js'
+import { SOURCE_LABEL, SOURCE_SHORT, barcodeOf, defaultBase, gramsOf, hitLine, qtyForGrams, snapshotOf, sourceNotes } from './lookup.js'
+import { NO_CODE_TEXT, gtinCheckOk, lookupCode, scanMethods } from './barcode.js'
 
 const toast = m => useUI.getState().toast(m)
 const fail = e => toast(e?.message || nt('Something went wrong'))
@@ -149,19 +150,76 @@ function HitRow({ hit, onPick }) {
   </button>
 }
 
+/* The barcode panel. Order of preference, on every device: a PHOTO of the barcode through the
+   phone's own camera (always works, and is read in the page); the live viewfinder where the
+   browser or app has one (an extra); and typing the number (always there). */
+function ScanPanel({ methods, onCode, onTyped }) {
+  const [live, setLive] = useState(false)
+  const [state, setState] = useState({ status: 'idle', message: '' })    // idle | reading | none | error
+  const [liveFail, setLiveFail] = useState('')
+  const [code, setCode] = useState('')
+  const camera = useRef(null)
+  const gallery = useRef(null)
+  const alive = useRef(true)
+  useEffect(() => () => { alive.current = false }, [])
+
+  const choose = async file => {
+    if (!file) return
+    setState({ status: 'reading', message: '' }); setLiveFail('')
+    // Lazy: the decoder (a megabyte of WebAssembly) is fetched only now, the first time it is needed.
+    const { decodeFile } = await import('./barcode-decode.js')
+    const r = await decodeFile(file)
+    if (!alive.current) return
+    if (r.ok) { setState({ status: 'idle', message: '' }); onCode(r.code, 'photo'); return }
+    setState({ status: r.reason === 'none' ? 'none' : 'error', message: r.reason === 'none' ? NO_CODE_TEXT : r.message })
+  }
+  const startLive = async () => {
+    setLiveFail('')
+    if (methods.live === 'native') {
+      try { const r = await scanCode(); const c = r?.value && lookupCode(r.value); if (c) onCode(c, 'live') } catch (e) { setLiveFail(nt('The app’s scanner could not start: {0}', e?.message || e)) }
+    } else setLive(true)
+  }
+  const onFound = useCallback(c => { setLive(false); onCode(c, 'live') }, [onCode])
+
+  if (live) return <BarcodeScanner onFound={onFound} onCancel={() => setLive(false)} onError={text => setLiveFail(text)} />
+
+  return <div className="nut-scan">
+    <input ref={camera} type="file" accept="image/*" capture="environment" hidden onChange={e => { choose(e.target.files?.[0]); e.target.value = '' }} />
+    <input ref={gallery} type="file" accept="image/*" hidden onChange={e => { choose(e.target.files?.[0]); e.target.value = '' }} />
+    <Button variant="primary" icon="camera" onClick={() => camera.current?.click()} disabled={state.status === 'reading'}>
+      {state.status === 'none' || state.status === 'error' ? nt('Retake the photo') : nt('Take a photo of the barcode')}
+    </Button>
+    <div className="row" style={{ gap: 8, marginTop: 8 }}>
+      <Button size="sm" icon="image" style={{ flex: 1 }} onClick={() => gallery.current?.click()} disabled={state.status === 'reading'}>{nt('Choose a photo')}</Button>
+      {methods.live && <Button size="sm" icon="qr" style={{ flex: 1 }} onClick={startLive}>{nt('Live scan')}</Button>}
+    </div>
+    {state.status === 'reading' && <div className="nut-banner info"><span>{nt('Reading the barcode…')}</span></div>}
+    {(state.status === 'none' || state.status === 'error') && <div className="nut-banner warn"><Icon name="warning" /><span>{nt(state.message)}</span></div>}
+    {liveFail && <div className="nut-banner warn"><Icon name="warning" /><span>{nt('Live scan did not start. {0}', liveFail)}</span></div>}
+    {!methods.live && methods.liveWhy && state.status === 'idle' && !liveFail && <div className="muted small nut-livewhy">{nt(methods.liveWhy)}</div>}
+    <div className="muted small nut-livewhy">{state.status === 'idle' ? nt('Tip: fill the frame with the barcode and keep it sharp.') : ''}</div>
+    <div className="nut-barcode">
+      <div className="muted small" style={{ marginBottom: 6 }}>{nt('Or type the number printed under the barcode')}</div>
+      <div className="row" style={{ gap: 8 }}>
+        <input className="field" inputMode="numeric" placeholder={nt('Barcode number')} value={code} maxLength={20} onChange={e => setCode(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') onTyped(code) }} aria-label={nt('Barcode number')} />
+        <Button onClick={() => onTyped(code)}>{nt('Look up')}</Button>
+      </div>
+    </div>
+  </div>
+}
+
 function SearchTab({ date, meal, onSaved, close }) {
   const isAdmin = useStore(s => !!s.user?.admin)
   const [text, setText] = useState('')
   const [state, setState] = useState({ status: 'idle', data: null })
   const [picked, setPicked] = useState(null)
   const [busy, setBusy] = useState(false)
-  const [scan, setScan] = useState(null)         // null | 'camera' | 'type'
-  const [support, setSupport] = useState('none')
-  const [code, setCode] = useState('')
-  const [bc, setBc] = useState(null)             // { status, result }
+  const [scanOpen, setScanOpen] = useState(false)
+  const [methods, setMethods] = useState({ photo: true, type: true, live: null, liveWhy: null })
+  const [bc, setBc] = useState(null)             // { status, result, code, warn }
   const seq = useRef(0)
 
-  useEffect(() => { let live = true; scannerSupport({ mobile: MOBILE }).then(s => live && setSupport(s)); return () => { live = false } }, [])
+  useEffect(() => { let live = true; scanMethods({ mobile: MOBILE }).then(m => live && setMethods(m)); return () => { live = false } }, [])
 
   const run = query => {
     const n = ++seq.current
@@ -177,20 +235,16 @@ function SearchTab({ date, meal, onSaved, close }) {
     return () => clearTimeout(id)
   }, [text])
 
+  // A code from a photo, the live scanner or the keyboard. Look it up straight away.
   const lookup = async raw => {
     const c = barcodeOf(raw)
     if (!c) { toast(nt('A barcode is 8 to 14 digits.')); return }
-    setScan(null); setBc({ status: 'loading' })
-    try { setBc({ status: 'done', result: await nutri.lookupBarcode(c), code: c }) }
+    const warn = !gtinCheckOk(c)
+    setScanOpen(false); setBc({ status: 'loading' })
+    try { setBc({ status: 'done', result: await nutri.lookupBarcode(c), code: c, warn }) }
     catch (e) { setBc({ status: 'error', error: e.status === 429 ? nt('Too many lookups — wait a moment and try again.') : e.message, code: c }) }
   }
-  const startScan = async () => {
-    if (support === 'native') {
-      try { const r = await scanCode(); if (r?.value) lookup(r.value) } catch { toast(nt('Could not open the scanner. Type the barcode instead.')); setScan('type') }
-    } else if (support === 'web') setScan('camera')
-    else setScan('type')
-  }
-  const onFound = useCallback(c => lookup(c), [])
+  const onCode = useCallback(c => lookup(c), [])
 
   const add = async (qty, base) => {
     setBusy(true)
@@ -202,30 +256,21 @@ function SearchTab({ date, meal, onSaved, close }) {
 
   if (picked) return <Portion name={picked.name} brand={picked.brand} bases={picked.bases} meal={meal} tag={SOURCE_LABEL[picked.source]} busy={busy} onBack={() => setPicked(null)} onAdd={add} />
 
-  if (scan === 'camera') return <BarcodeScanner onFound={onFound} onCancel={() => setScan(null)} />
-
   const notes = sourceNotes(state.data?.sources, { admin: isAdmin })
   const r = bc?.result
   return <>
     <div className="row" style={{ gap: 8 }}>
       <div style={{ flex: 1 }}><SearchField value={text} onChange={e => setText(e.target.value)} onClear={() => setText('')} placeholder={nt('Search foods')} onKeyDown={e => { if (e.key === 'Enter' && text.trim().length >= 2) run(text.trim()) }} /></div>
-      <button className="iconbtn" onClick={startScan} aria-label={nt('Scan a barcode')}><Icon name="qr" /></button>
+      <button className={'iconbtn' + (scanOpen ? ' on' : '')} onClick={() => setScanOpen(o => !o)} aria-label={nt('Scan a barcode')} aria-expanded={scanOpen}><Icon name="qr" /></button>
     </div>
-    {scan === 'type' && <div className="nut-barcode">
-      {support === 'none' && <div className="muted small" style={{ marginBottom: 6 }}>{nt("This browser can't scan barcodes with the camera. Type the number printed under the barcode.")}</div>}
-      <div className="row" style={{ gap: 8 }}>
-        <input className="field" inputMode="numeric" placeholder={nt('Barcode number')} value={code} maxLength={20} onChange={e => setCode(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') lookup(code) }} aria-label={nt('Barcode number')} />
-        <Button onClick={() => lookup(code)}>{nt('Look up')}</Button>
-      </div>
-    </div>}
-    {scan !== 'type' && support === 'none' && !bc && <button className="linkbtn nut-typelink" onClick={() => setScan('type')}>{nt('Enter a barcode by hand')}</button>}
+    {scanOpen && <ScanPanel methods={methods} onCode={onCode} onTyped={lookup} />}
 
     {bc?.status === 'loading' && <div className="muted small nut-empty">{nt('Looking up the barcode…')}</div>}
     {bc?.status === 'error' && <div className="nut-banner warn"><Icon name="warning" /><span>{bc.error}</span><button className="linkbtn" onClick={() => lookup(bc.code)}>{nt('Try again')}</button></div>}
     {r?.found && <div className="nut-pick-list"><HitRow hit={r.product} onPick={setPicked} /></div>}
     {r && !r.found && <div className="nut-banner info">
       <Icon name="info" />
-      <span>{r.reason === 'error' ? nt(r.error) : r.reason === 'no-nutrition' ? nt('“{0}” is in Open Food Facts but has no nutrition data.', r.name) : nt('Barcode {0} is not in Open Food Facts.', bc.code)}</span>
+      <span>{r.reason === 'error' ? nt(r.error) : r.reason === 'no-nutrition' ? nt('“{0}” is in Open Food Facts but has no nutrition data.', r.name) : nt('Barcode {0} is not in Open Food Facts.', bc.code)}{bc.warn && r.reason !== 'error' ? ' ' + nt('Its check digit does not add up, so look for a typo.') : ''}</span>
       {r.reason === 'error'
         ? <button className="linkbtn" onClick={() => lookup(bc.code)}>{nt('Try again')}</button>
         : <button className="linkbtn" onClick={() => openFoodSheet({ prefill: { name: r.name || '', ext: bc.code }, onSaved: () => { onSaved(); close() } })}>{nt('Add it as my food')}</button>}
@@ -238,7 +283,7 @@ function SearchTab({ date, meal, onSaved, close }) {
       {state.data.results.length === 0 && state.status !== 'error' && <div className="muted small nut-empty">{nt('Nothing found for “{0}”.', state.data.q)}</div>}
       {state.data.results.map(h => <HitRow key={h.source + h.ext} hit={h} onPick={setPicked} />)}
     </div>}
-    {state.status === 'idle' && !bc && <div className="muted small nut-empty">{nt('Search Open Food Facts and USDA, or scan a barcode.')}</div>}
+    {state.status === 'idle' && !bc && !scanOpen && <div className="muted small nut-empty">{nt('Search Open Food Facts and USDA, or scan a barcode.')}</div>}
   </>
 }
 

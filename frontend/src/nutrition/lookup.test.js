@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { barcodeOf, snapshotOf, defaultBase, gramsOf, qtyForGrams, sourceNotes, hitLine, scannerSupport } from './lookup.js'
+import { barcodeOf, snapshotOf, defaultBase, gramsOf, qtyForGrams, sourceNotes, hitLine } from './lookup.js'
 
 const hit = { source: 'off', ext: '301', name: 'Nutella', brand: 'Ferrero', bases: [
   { label: '15 g', grams: 15, per: { calories: 81, protein_g: 0.9, carbs_g: 8.6, fat_g: 4.6 } },
@@ -39,18 +39,5 @@ describe('lookup helpers', () => {
   it('hitLine joins brand and portion without stray separators', () => {
     expect(hitLine(hit)).toBe('Ferrero · 15 g')
     expect(hitLine({ ...hit, brand: '' })).toBe('15 g')
-  })
-  it('scannerSupport: app → native; no BarcodeDetector or camera → none; otherwise web', async () => {
-    expect(await scannerSupport({ mobile: true })).toBe('native')
-    expect(await scannerSupport({ nav: {}, Detector: undefined })).toBe('none')
-    const nav = { mediaDevices: { getUserMedia() {} } }
-    expect(await scannerSupport({ nav, Detector: undefined })).toBe('none')
-    const D = function () {}
-    D.getSupportedFormats = async () => ['qr_code', 'ean_13']
-    expect(await scannerSupport({ nav, Detector: D })).toBe('web')
-    D.getSupportedFormats = async () => ['qr_code']
-    expect(await scannerSupport({ nav, Detector: D })).toBe('none')
-    D.getSupportedFormats = async () => { throw new Error('x') }
-    expect(await scannerSupport({ nav, Detector: D })).toBe('none')
   })
 })

@@ -151,6 +151,16 @@ photo uses [**jsQR**](https://github.com/cozmo/jsQR) by Cosmo Wolfe, under the *
 Where the browser has a native `BarcodeDetector`, that is tried first and jsQR is the fallback.
 Video frames are decoded in memory and never uploaded or stored.
 
+### Food barcode photo scan in the browser — `zxing-wasm`
+
+Nutrition reads a product barcode (EAN-13, EAN-8, UPC-A, UPC-E) from a still photo with
+[**zxing-wasm**](https://github.com/Sec-ant/zxing-wasm) by Ze-Zheng Wu, under the **MIT License**
+(in the package's own `LICENSE`). It is a WebAssembly build of
+[**ZXing-C++**](https://github.com/zxing-cpp/zxing-cpp) (Nu-book Inc. and contributors), under the
+**Apache License 2.0** (<https://www.apache.org/licenses/LICENSE-2.0>), which is compatible with
+the AGPL v3. Only the reader build ships; it is served from the app's own origin, loaded when someone
+first scans, and the photo is decoded in memory and never uploaded or stored.
+
 ### Camera scan & photo decode in the app — `@capacitor-mlkit/barcode-scanning`
 
 In the Android/iOS app, reading a code — from the camera or from an imported photo — uses the

@@ -14,6 +14,7 @@ const m = vi.hoisted(() => ({
   user: { id: 'u1', name: 'Me', admin: false },
   sheets: [],
   downscale: vi.fn(),
+  decode: vi.fn(),
   toast: vi.fn(),
   confirm: vi.fn(),
   api: {
@@ -41,6 +42,7 @@ vi.mock('../store/useUI.js', () => {
 vi.mock('../sheets.jsx', () => ({ confirmSheet: (...a) => m.confirm(...a) }))
 vi.mock('./api.js', () => m.api)
 vi.mock('./image.js', () => ({ downscaleToJpeg: (...a) => m.downscale(...a) }))
+vi.mock('./barcode-decode.js', () => ({ decodeFile: (...a) => m.decode(...a) }))
 
 const { default: Diary } = await import('./Diary.jsx')
 const { default: NutritionHomeCard } = await import('./HomeCard.jsx')
@@ -101,7 +103,7 @@ beforeEach(() => {
   shown = []
   m.user = { id: 'u1', name: 'Me', admin: false }
   for (const f of Object.values(m.api)) f.mockReset()
-  m.toast.mockReset(); m.confirm.mockReset(); m.downscale.mockReset()
+  m.toast.mockReset(); m.confirm.mockReset(); m.downscale.mockReset(); m.decode.mockReset()
   globalThis.URL.revokeObjectURL = globalThis.URL.revokeObjectURL || (() => {})
   m.api.getDay.mockResolvedValue(dayOf())
   m.api.getConfig.mockResolvedValue({ ai: { limit: 30, used: 3, remaining: 27, available: true, reason: null } })
@@ -370,14 +372,121 @@ describe('search, portions and barcodes', () => {
     expect(s.el.textContent).toContain('One serving: 1 pot')
   })
 
-  it('without a camera scanner the barcode button offers typing; a bad number is refused before any request', async () => {
+  it('the scan button always offers a photo of the barcode and the typing box — even with no live scanner at all (an iPhone: a camera API, no BarcodeDetector)', async () => {
+    const nav = navigator.mediaDevices
+    Object.defineProperty(navigator, 'mediaDevices', { value: { getUserMedia: vi.fn() }, configurable: true })
+    delete globalThis.BarcodeDetector
+    const s = await openSearch()
+    await wait(20)
+    Object.defineProperty(navigator, 'mediaDevices', { value: nav, configurable: true })
+    await click(s.el.querySelector('[aria-label="Scan a barcode"]'))
+    expect(byText('button', 'Take a photo of the barcode')).toBeTruthy()
+    expect(byText('button', 'Choose a photo')).toBeTruthy()
+    expect(byText('button', 'Live scan')).toBeUndefined()
+    expect(s.el.textContent).toContain('iPhone Safari does not')              // why live is off, in words
+    const camera = s.el.querySelectorAll('input[type="file"]')[0]
+    expect(camera.getAttribute('capture')).toBe('environment')                // the rear camera, like the meal photo
+    expect(camera.accept).toBe('image/*')
+    expect(s.el.querySelectorAll('input[type="file"]')[1].hasAttribute('capture')).toBe(false)
+    expect(s.el.querySelector('input[placeholder="Barcode number"]')).toBeTruthy()
+  })
+
+  it('a bad typed number is refused before any request', async () => {
     const s = await openSearch()
     await click(s.el.querySelector('[aria-label="Scan a barcode"]'))
-    expect(s.el.textContent).toContain("can't scan barcodes with the camera")
     await setValue(s.el.querySelector('input[placeholder="Barcode number"]'), '12ab')
     await click(byText('button', 'Look up'))
     expect(m.toast).toHaveBeenCalledWith('A barcode is 8 to 14 digits.')
     expect(m.api.lookupBarcode).not.toHaveBeenCalled()
+  })
+
+  const photoOf = async (s, which = 0) => {
+    const input = s.el.querySelectorAll('input[type="file"]')[which]
+    Object.defineProperty(input, 'files', { value: [new File(['x'], 'bc.jpg', { type: 'image/jpeg' })], configurable: true })
+    await act(async () => { input.dispatchEvent(new Event('change', { bubbles: true })) }); await flush(); await flush()
+  }
+
+  it('a photo of a barcode is decoded in the page and looked up straight away', async () => {
+    m.decode.mockResolvedValue({ ok: true, code: '3017620422003', format: 'EAN13', edge: 1600 })
+    m.api.lookupBarcode.mockResolvedValue({ code: '3017620422003', found: true, product: NUTELLA })
+    const s = await openSearch()
+    await click(s.el.querySelector('[aria-label="Scan a barcode"]'))
+    await photoOf(s)
+    expect(m.decode).toHaveBeenCalledTimes(1)
+    expect(m.decode.mock.calls[0][0].name).toBe('bc.jpg')
+    expect(m.api.lookupBarcode).toHaveBeenCalledWith('3017620422003')
+    expect(s.el.textContent).toContain('Nutella')
+    expect(byText('button', 'Take a photo of the barcode')).toBeUndefined()   // the panel closed once it had a code
+  })
+
+  it('a gallery photo takes the same path', async () => {
+    m.decode.mockResolvedValue({ ok: true, code: '96385074', format: 'EAN8', edge: 1600 })
+    m.api.lookupBarcode.mockResolvedValue({ code: '96385074', found: false, reason: 'unknown' })
+    const s = await openSearch()
+    await click(s.el.querySelector('[aria-label="Scan a barcode"]'))
+    await photoOf(s, 1)
+    expect(m.api.lookupBarcode).toHaveBeenCalledWith('96385074')
+    expect(s.el.textContent).toContain('Barcode 96385074 is not in Open Food Facts')
+  })
+
+  it('no barcode in the photo: say so, offer Retake, keep the typing box, look nothing up', async () => {
+    m.decode.mockResolvedValue({ ok: false, reason: 'none', message: '' })
+    const s = await openSearch()
+    await click(s.el.querySelector('[aria-label="Scan a barcode"]'))
+    await photoOf(s)
+    expect(s.el.textContent).toContain('No barcode found in that photo')
+    expect(byText('button', 'Retake the photo')).toBeTruthy()
+    expect(s.el.querySelector('input[placeholder="Barcode number"]')).toBeTruthy()
+    expect(m.api.lookupBarcode).not.toHaveBeenCalled()
+    // and typing from here still works
+    m.api.lookupBarcode.mockResolvedValue({ code: '3017620422003', found: true, product: NUTELLA })
+    await setValue(s.el.querySelector('input[placeholder="Barcode number"]'), '3017620422003')
+    await click(byText('button', 'Look up'))
+    expect(s.el.textContent).toContain('Nutella')
+  })
+
+  it('a decoder that cannot load shows its real message, and typing still works', async () => {
+    m.decode.mockResolvedValue({ ok: false, reason: 'engine', message: 'The barcode reader could not be loaded: Failed to fetch dynamically imported module' })
+    const s = await openSearch()
+    await click(s.el.querySelector('[aria-label="Scan a barcode"]'))
+    await photoOf(s)
+    expect(s.el.textContent).toContain('Failed to fetch dynamically imported module')
+    expect(s.el.querySelector('input[placeholder="Barcode number"]')).toBeTruthy()
+  })
+
+  it('shows "Reading the barcode…" while the decoder works', async () => {
+    let finish
+    m.decode.mockImplementation(() => new Promise(r => { finish = r }))
+    const s = await openSearch()
+    await click(s.el.querySelector('[aria-label="Scan a barcode"]'))
+    await photoOf(s)
+    expect(s.el.textContent).toContain('Reading the barcode')
+    expect(byText('button', 'Take a photo of the barcode').disabled).toBe(true)
+    await act(async () => { finish({ ok: false, reason: 'none', message: '' }) }); await flush()
+    expect(s.el.textContent).not.toContain('Reading the barcode')
+  })
+
+  it('where the browser has a barcode reader the live scan is offered as an EXTRA, next to the photo', async () => {
+    const nav = navigator.mediaDevices
+    Object.defineProperty(navigator, 'mediaDevices', { value: { getUserMedia: vi.fn() }, configurable: true })
+    globalThis.BarcodeDetector = Object.assign(function () {}, { getSupportedFormats: async () => ['ean_13', 'qr_code'] })
+    try {
+      const s = await openSearch()
+      await wait(20)
+      await click(s.el.querySelector('[aria-label="Scan a barcode"]'))
+      expect(byText('button', 'Live scan')).toBeTruthy()
+      expect(byText('button', 'Take a photo of the barcode')).toBeTruthy()
+      expect(s.el.querySelector('input[placeholder="Barcode number"]')).toBeTruthy()
+    } finally { delete globalThis.BarcodeDetector; Object.defineProperty(navigator, 'mediaDevices', { value: nav, configurable: true }) }
+  })
+
+  it('a typed code whose check digit is wrong gets a typo hint when it is not found', async () => {
+    m.api.lookupBarcode.mockResolvedValue({ code: '3017620422004', found: false, reason: 'unknown' })
+    const s = await openSearch()
+    await click(s.el.querySelector('[aria-label="Scan a barcode"]'))
+    await setValue(s.el.querySelector('input[placeholder="Barcode number"]'), '3017620422004')
+    await click(byText('button', 'Look up'))
+    expect(s.el.textContent).toContain('check digit does not add up')
   })
 
   it('a typed barcode finds the product, which can be added', async () => {
