@@ -274,12 +274,20 @@ describe('sheets', () => {
   })
 })
 
-const NUTELLA = { source: 'off', ext: '3017620422003', name: 'Nutella', brand: 'Ferrero', bases: [
+const NUTELLA = { source: 'off', kind: 'off', rank: 1180, ext: '3017620422003', name: 'Nutella', brand: 'Ferrero', bases: [
   { label: '15 g', grams: 15, per: { calories: 81, protein_g: 0.9, carbs_g: 8.6, fat_g: 4.6 } },
   { label: '100 g', grams: 100, per: { calories: 539, protein_g: 6.3, carbs_g: 57.5, fat_g: 30.9 } }
 ] }
 const wait = ms => act(async () => { await new Promise(r => setTimeout(r, ms)) })
-const found = (results = [NUTELLA], sources = { off: { ok: true, count: results.length }, usda: { ok: false, skipped: 'no-key' } }) => ({ q: 'nutella', results, sources })
+// The app asks for each source separately; this answers each the way the server would.
+//   spec: an array of hits | 'skipped' (no USDA key) | { fail, kind } | an Error (the request itself failed)
+const mockSearch = ({ off = [], usda = 'skipped' } = {}) => m.api.searchFoods.mockImplementation(async (q, source) => {
+  const spec = source === 'off' ? off : usda
+  if (spec instanceof Error) throw spec
+  if (spec === 'skipped') return { q, results: [], sources: { [source]: { ok: false, skipped: 'no-key' } } }
+  if (spec && spec.fail) return { q, results: [], sources: { [source]: { ok: false, kind: spec.kind || 'down', error: spec.fail } } }
+  return { q, results: spec, sources: { [source]: { ok: true, count: spec.length } } }
+})
 
 describe('search, portions and barcodes', () => {
   async function openSearch() {
@@ -289,19 +297,20 @@ describe('search, portions and barcodes', () => {
   const typeSearch = async (s, v) => { await setValue(s.el.querySelector('input[placeholder="Search foods"]'), v); await wait(520) }
 
   it('opens on Search, searches after a pause, and says USDA is off when no key is set', async () => {
-    m.api.searchFoods.mockResolvedValue(found())
+    mockSearch({ off: [NUTELLA] })
     const s = await openSearch()
     expect(s.el.textContent).toContain('Search Open Food Facts and USDA')
     await typeSearch(s, 'nutella')
-    expect(m.api.searchFoods).toHaveBeenCalledTimes(1)
-    expect(m.api.searchFoods).toHaveBeenCalledWith('nutella')
+    expect(m.api.searchFoods).toHaveBeenCalledTimes(2)                       // one request per source, started together
+    expect(m.api.searchFoods).toHaveBeenCalledWith('nutella', 'off')
+    expect(m.api.searchFoods).toHaveBeenCalledWith('nutella', 'usda')
     expect(s.el.textContent).toContain('Nutella')
     expect(s.el.textContent).toContain('Ferrero · 15 g')
     expect(s.el.textContent).toContain('an admin has not added a key')
   })
 
   it('does not search for a single letter, and a fast typist makes one request', async () => {
-    m.api.searchFoods.mockResolvedValue(found())
+    mockSearch({ off: [NUTELLA] })
     const s = await openSearch()
     await setValue(s.el.querySelector('input[placeholder="Search foods"]'), 'n')
     await wait(520)
@@ -310,28 +319,86 @@ describe('search, portions and barcodes', () => {
     await setValue(s.el.querySelector('input[placeholder="Search foods"]'), 'nut')
     await setValue(s.el.querySelector('input[placeholder="Search foods"]'), 'nutella')
     await wait(520)
-    expect(m.api.searchFoods).toHaveBeenCalledTimes(1)
+    expect(m.api.searchFoods).toHaveBeenCalledTimes(2)                       // 'nutella' once, for both sources
+    expect(new Set(m.api.searchFoods.mock.calls.map(c => c[0]))).toEqual(new Set(['nutella']))
   })
 
   it('shows where to fix a missing USDA key to an admin', async () => {
     m.user = { id: 'a', admin: true }
-    m.api.searchFoods.mockResolvedValue(found())
+    mockSearch({ off: [NUTELLA] })
     const s = await openSearch()
     await typeSearch(s, 'nutella')
     expect(s.el.textContent).toContain('Goals → Admin')
   })
 
-  it('a source that is down is named, the other results still show, and Try again searches again', async () => {
-    m.api.searchFoods.mockResolvedValue(found([NUTELLA], { off: { ok: false, kind: 'timeout', error: 'Open Food Facts did not answer in time' }, usda: { ok: true, count: 1 } }))
+  it('a source that is down is named, the other results still show, and Retry asks only that source', async () => {
+    mockSearch({ off: { fail: 'Open Food Facts did not answer in time', kind: 'timeout' }, usda: [{ ...NUTELLA, source: 'usda', kind: 'sr', ext: '1', name: 'Hazelnut spread', rank: 2100 }] })
     const s = await openSearch()
-    await typeSearch(s, 'nutella')
+    await typeSearch(s, 'hazelnut spread')
     expect(s.el.textContent).toContain('Open Food Facts did not answer in time')
-    expect(s.el.textContent).toContain('Nutella')
-    await click(byText('button', 'Try again'))
+    expect(s.el.textContent).toContain('Hazelnut spread')
     expect(m.api.searchFoods).toHaveBeenCalledTimes(2)
+    mockSearch({ off: [{ ...NUTELLA, name: 'Hazelnut spread', ext: '2' }], usda: [{ ...NUTELLA, source: 'usda', kind: 'sr', ext: '1', name: 'Hazelnut spread', rank: 2100 }] })
+    await click(byText('button', 'Retry'))
+    expect(m.api.searchFoods).toHaveBeenCalledTimes(3)
+    expect(m.api.searchFoods.mock.calls.at(-1)).toEqual(['hazelnut spread', 'off'])     // only the one that failed
+    expect(s.el.textContent).not.toContain('did not answer in time')
+    expect(s.el.querySelectorAll('.nut-pick')).toHaveLength(2)
   })
 
-  it('a failed search shows the reason instead of an empty list; a 429 is worded kindly', async () => {
+  it('results appear as each source answers: USDA is on screen while Open Food Facts is still working', async () => {
+    let finishOff
+    m.api.searchFoods.mockImplementation((q, source) => (source === 'off'
+      ? new Promise(r => { finishOff = () => r({ q, results: [NUTELLA], sources: { off: { ok: true, count: 1 } } }) })
+      : Promise.resolve({ q, results: [{ ...NUTELLA, source: 'usda', kind: 'sr', ext: '1', name: 'Hazelnut spread', rank: 2100 }], sources: { usda: { ok: true, count: 1 } } })))
+    const s = await openSearch()
+    await typeSearch(s, 'hazelnut')
+    expect(s.el.textContent).toContain('Hazelnut spread')
+    expect(s.el.querySelector('[role="status"]').textContent).toContain('Searching Open Food Facts…')
+    await act(async () => { finishOff() }); await flush()
+    expect(s.el.querySelector('[role="status"]')).toBeNull()
+    expect([...s.el.querySelectorAll('.nut-pick-t')].map(e => e.textContent)).toEqual(['Hazelnut spread', 'Nutella'])   // merged by rank: reference food first
+  })
+
+  it('a source that stays slow is called slow, not left as an unexplained spinner', async () => {
+    vi.useFakeTimers()
+    try {
+      m.api.searchFoods.mockImplementation(() => new Promise(() => {}))
+      openAddSheet({ date: '2026-10-12', meal: 'snack', onSaved: vi.fn() })
+      const render = m.sheets.at(-1)
+      const el = document.createElement('div'); host.appendChild(el)
+      const r = createRoot(el)
+      await act(async () => { r.render(render(vi.fn())) })
+      await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+      await setValue(el.querySelector('input[placeholder="Search foods"]'), 'egg')
+      await act(async () => { await vi.advanceTimersByTimeAsync(500) })
+      expect(el.querySelector('[role="status"]').textContent).toContain('Searching USDA and Open Food Facts…')
+      await act(async () => { await vi.advanceTimersByTimeAsync(6500) })
+      expect(el.querySelector('[role="status"]').textContent).toContain('USDA and Open Food Facts are slow right now')
+      act(() => r.unmount())
+    } finally { vi.useRealTimers() }
+  })
+
+  it('a rejected key is reported without a Retry (asking again cannot help); a timeout has one', async () => {
+    mockSearch({ off: [NUTELLA], usda: { fail: 'USDA FoodData Central rejected the API key', kind: 'auth' } })
+    const s = await openSearch()
+    await typeSearch(s, 'nutella')
+    expect(s.el.textContent).toContain('rejected the API key')
+    expect(byText('button', 'Retry')).toBeUndefined()
+    expect(s.el.textContent).toContain('Nutella')
+  })
+
+  it('a request that never reached the server (offline) is explained, not a blank list', async () => {
+    mockSearch({ off: new Error('Failed to fetch'), usda: new Error('Failed to fetch') })
+    const s = await openSearch()
+    await typeSearch(s, 'nutella')
+    expect(s.el.textContent).toContain('Open Food Facts: Failed to fetch')
+    expect(s.el.textContent).toContain('The search could not finish')
+    expect(s.el.textContent).not.toContain('Nothing found')
+    expect(byText('button', 'Quick add')).toBeTruthy()
+  })
+
+  it('a 429 is worded kindly and still leaves a way to log', async () => {
     m.api.searchFoods.mockRejectedValue(Object.assign(new Error('HTTP 429'), { status: 429 }))
     const s = await openSearch()
     await typeSearch(s, 'nutella')
@@ -339,8 +406,46 @@ describe('search, portions and barcodes', () => {
     expect(s.el.textContent).not.toContain('Nothing found')
   })
 
+  it('truly nothing found: say so, suggest a simpler word, and offer Describe (AI) and Quick add', async () => {
+    mockSearch({ off: [], usda: [] })
+    const s = await openSearch()
+    await typeSearch(s, 'zzqx pie')
+    expect(s.el.textContent).toContain('Nothing found for “zzqx pie”.')
+    expect(s.el.textContent).toContain('one simple word')
+    expect(byText('button', 'Describe it (AI)').disabled).toBe(false)
+    expect(s.el.querySelectorAll('.nut-ways button')).toHaveLength(2)
+  })
+
+  it('"Describe it (AI)" opens Describe with the search words already typed in', async () => {
+    mockSearch({ off: [], usda: [] })
+    const s = await openSearch()
+    await typeSearch(s, 'grandma’s lentil soup')
+    await click(s.el.querySelector('.nut-ways button'))
+    expect(s.el.textContent).toContain('Describe your meal')
+    expect(s.el.querySelector('textarea').value).toBe('grandma’s lentil soup')
+  })
+
+  it('"Quick add" from the empty result opens quick add with the name filled in', async () => {
+    mockSearch({ off: [], usda: [] })
+    const s = await openSearch()
+    await typeSearch(s, 'lentil soup')
+    await click(s.el.querySelectorAll('.nut-ways button')[1])
+    expect(s.el.querySelector('input[placeholder="Name (optional)"]').value).toBe('lentil soup')
+  })
+
+  it('when the AI is not available, Describe is off here too, with the reason', async () => {
+    m.api.getConfig.mockResolvedValue({ ai: { limit: 30, used: 0, remaining: 30, available: false, reason: 'unavailable' } })
+    mockSearch({ off: [], usda: [] })
+    const s = await openSearch()
+    await wait(20)
+    await typeSearch(s, 'lentil soup')
+    expect(s.el.querySelector('.nut-ways button').disabled).toBe(true)
+    expect(s.el.querySelector('.nut-ways').textContent).toContain('Coach switched on')
+    expect(s.el.querySelectorAll('.nut-ways button')[1].disabled).toBe(false)
+  })
+
   it('pick a hit, choose the 100 g portion, set grams, and the entry carries the snapshot and qty', async () => {
-    m.api.searchFoods.mockResolvedValue(found())
+    mockSearch({ off: [NUTELLA] })
     m.api.addEntries.mockResolvedValue({})
     const onSaved = vi.fn()
     openAddSheet({ date: '2026-10-12', meal: 'snack', onSaved })
@@ -363,8 +468,8 @@ describe('search, portions and barcodes', () => {
   })
 
   it('a food whose only portion has no weight shows servings but no grams box', async () => {
-    const pot = { source: 'usda', ext: '9', name: 'Yogurt', brand: '', bases: [{ label: '1 pot', grams: null, per: { calories: 90, protein_g: 5, carbs_g: 12, fat_g: 2 } }] }
-    m.api.searchFoods.mockResolvedValue(found([pot]))
+    const pot = { source: 'usda', kind: 'branded', rank: 1100, ext: '9', name: 'Yogurt', brand: '', bases: [{ label: '1 pot', grams: null, per: { calories: 90, protein_g: 5, carbs_g: 12, fat_g: 2 } }] }
+    mockSearch({ usda: [pot] })
     const s = await openSearch()
     await typeSearch(s, 'yogurt')
     await click(byText('.nut-pick', 'Yogurt'))

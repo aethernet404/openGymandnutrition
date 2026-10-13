@@ -85,12 +85,12 @@ function Problem({ error, mode, onRetry, onDescribe, onManual }) {
  * @param {{ mode:'photo'|'text', date:string, meal:string, ai:object|null, onAi:(a:object)=>void,
  *           onBack:()=>void, onSaved:()=>void, onManual:(name:string)=>void, close:()=>void }} p
  */
-export default function AiLog({ mode: initialMode, date, meal, ai, onAi, onBack, onSaved, onManual, close }) {
+export default function AiLog({ mode: initialMode, initialText = '', date, meal, ai, onAi, onBack, onSaved, onManual, close }) {
   const [mode, setMode] = useState(initialMode)
   const [stage, setStage] = useState('pick')       // pick | prep | busy | review | error | notfood
   const [photo, setPhoto] = useState(null)         // { base64, bytes, previewUrl }
   const [note, setNote] = useState('')
-  const [text, setText] = useState('')
+  const [text, setText] = useState(initialText)
   const [draft, setDraft] = useState(null)
   const [error, setError] = useState(null)
   const alive = useRef(true)

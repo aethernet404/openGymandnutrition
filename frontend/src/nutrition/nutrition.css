@@ -121,3 +121,9 @@
 .nut-livewhy{margin:8px 2px 0}
 .nut-scan .nut-banner{background:var(--surface)}
 .iconbtn.on{color:var(--acc)}
+
+/* ---- search progress ---- */
+.nut-searching{display:flex;align-items:center;gap:10px;margin:12px 2px;color:var(--label-2);font-size:14px}
+.nut-spinner.sm{width:16px;height:16px;border-width:2px;flex:none}
+.nut-nothing{margin:14px 2px;display:flex;flex-direction:column;gap:6px}
+.nut-ways{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px;align-items:center}

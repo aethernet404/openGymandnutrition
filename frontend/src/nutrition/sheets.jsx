@@ -17,6 +17,7 @@ import * as nutri from './api.js'
 import { MEALS, MEAL_LABEL, foodBody, macroLine, quickBody, scaleFood, trim } from './diary.js'
 import { SOURCE_LABEL, SOURCE_SHORT, barcodeOf, defaultBase, gramsOf, hitLine, qtyForGrams, snapshotOf, sourceNotes } from './lookup.js'
 import { NO_CODE_TEXT, gtinCheckOk, lookupCode, scanMethods } from './barcode.js'
+import * as finder from './search.js'
 
 const toast = m => useUI.getState().toast(m)
 const fail = e => toast(e?.message || nt('Something went wrong'))
@@ -135,13 +136,6 @@ function FoodPick({ date, meal, onSaved, close }) {
 
 /* ------------------------------ search & barcode ------------------------------ */
 
-function Notes({ notes, onRetry }) {
-  return notes.map((n, i) => <div key={i} className={'nut-banner ' + n.tone}>
-    <Icon name={n.tone === 'warn' ? 'warning' : 'info'} /><span>{nt(n.text)}</span>
-    {n.retry && <button className="linkbtn" onClick={onRetry}>{nt('Try again')}</button>}
-  </div>)
-}
-
 function HitRow({ hit, onPick }) {
   const b = defaultBase(hit)
   return <button className="nut-pick" onClick={() => onPick(hit)}>
@@ -208,32 +202,85 @@ function ScanPanel({ methods, onCode, onTyped }) {
   </div>
 }
 
-function SearchTab({ date, meal, onSaved, close }) {
+/* What a search shows, always with a reason: results as they arrive, a line for anything still
+   loading, a named failure with its own Retry, the note that USDA is off, and — only when every
+   source really answered with nothing — "nothing found" with the ways to log it anyway. */
+function SearchResults({ per, q, slow, isAdmin, ai, onPick, onRetry, onDescribe, onQuick }) {
+  const v = finder.view(per)
+  const aiOk = !!ai && ai.available && ai.remaining > 0
+  const info = sourceNotes(Object.fromEntries(v.skipped.map(id => [id, { ok: false, skipped: per[id].why }])), { admin: isAdmin })
+  const ways = <div className="nut-ways">
+    <Button size="sm" icon="sparkles" onClick={onDescribe} disabled={!aiOk}>{nt('Describe it (AI)')}</Button>
+    <Button size="sm" icon="plus" onClick={onQuick}>{nt('Quick add')}</Button>
+    {!aiOk && ai && <div className="muted small">{nt(ai.available ? 'No AI analyses left today.' : unavailableText(ai.reason))}</div>}
+  </div>
+  return <>
+    {v.errors.map(e => <div key={e.id} className="nut-banner warn" role="alert">
+      <Icon name="warning" /><span>{nt(e.error)}</span>
+      {e.kind !== 'auth' && <button className="linkbtn" onClick={() => onRetry(e.id)}>{nt('Retry')}</button>}
+    </div>)}
+    {info.map((n, i) => <div key={i} className={'nut-banner ' + n.tone}><Icon name="info" /><span>{nt(n.text)}</span></div>)}
+    {v.results.length > 0 && <div className={'nut-pick-list' + (v.loading.length ? ' stale' : '')}>
+      {v.results.map(h => <HitRow key={h.source + h.ext + h.bases[0].label} hit={h} onPick={onPick} />)}
+    </div>}
+    {v.loading.length > 0 && <div className="nut-searching" role="status">
+      <div className="nut-spinner sm" aria-hidden="true" />
+      <span>{nt(slow ? (v.loading.length > 1 ? '{0} are slow right now — still waiting…' : '{0} is slow right now — still waiting…') : 'Searching {0}…', v.loading.map(id => finder.NAME[id]).join(' and '))}</span>
+    </div>}
+    {v.nothingFound && <div className="nut-nothing">
+      <div>{nt('Nothing found for “{0}”.', q)}</div>
+      <div className="muted small">{nt('Try one simple word (“egg”, not “whole egg”), or log it another way:')}</div>
+      {ways}
+    </div>}
+    {v.cannotTell && <div className="nut-nothing">
+      <div>{nt('The search could not finish, so there is nothing to show yet.')}</div>
+      <div className="muted small">{nt('Retry above, or log it another way:')}</div>
+      {ways}
+    </div>}
+  </>
+}
+
+function SearchTab({ date, meal, ai, onSaved, onDescribe, onQuick, close }) {
   const isAdmin = useStore(s => !!s.user?.admin)
   const [text, setText] = useState('')
-  const [state, setState] = useState({ status: 'idle', data: null })
+  const [per, setPer] = useState(null)           // null: nothing searched yet; else one status per source (search.js)
+  const [slow, setSlow] = useState(false)
   const [picked, setPicked] = useState(null)
   const [busy, setBusy] = useState(false)
   const [scanOpen, setScanOpen] = useState(false)
   const [methods, setMethods] = useState({ photo: true, type: true, live: null, liveWhy: null })
   const [bc, setBc] = useState(null)             // { status, result, code, warn }
   const seq = useRef(0)
+  const asked = useRef('')
 
   useEffect(() => { let live = true; scanMethods({ mobile: MOBILE }).then(m => live && setMethods(m)); return () => { live = false } }, [])
 
-  const run = query => {
-    const n = ++seq.current
-    setState(s => ({ status: 'loading', data: s.data }))
-    nutri.searchFoods(query)
-      .then(data => { if (n === seq.current) setState({ status: 'done', data }) })
-      .catch(e => { if (n === seq.current) setState({ status: 'error', data: null, error: e.status === 429 ? nt('Too many lookups — wait a moment and try again.') : e.message }) })
+  // Both sources are asked at once and shown as each lands; a retry asks only the one that failed.
+  const search = (query, ids) => {
+    const id = ids ? seq.current : ++seq.current
+    asked.current = query
+    if (!ids) setPer(finder.fresh())
+    setSlow(false)
+    finder.run(query, {
+      fetchSource: (q, source) => nutri.searchFoods(q, source),
+      onSource: (src, status) => setPer(p => ({ ...(p || finder.fresh()), [src]: status })),
+      ids: ids || finder.SOURCES,
+      stale: () => id !== seq.current
+    })
   }
   useEffect(() => {
     const q = text.trim()
-    if (q.length < 2) { seq.current++; setState({ status: 'idle', data: null }); return }
-    const id = setTimeout(() => run(q), 450)
+    if (q.length < 2) { seq.current++; setPer(null); return }
+    const id = setTimeout(() => search(q), 450)
     return () => clearTimeout(id)
   }, [text])
+  // After a few seconds of waiting, say that a source is slow rather than leave a spinner unexplained.
+  const waiting = per ? finder.view(per).loading : []
+  useEffect(() => {
+    if (!waiting.length) { setSlow(false); return }
+    const id = setTimeout(() => setSlow(true), 6000)
+    return () => clearTimeout(id)
+  }, [waiting.join(',')])
 
   // A code from a photo, the live scanner or the keyboard. Look it up straight away.
   const lookup = async raw => {
@@ -256,7 +303,6 @@ function SearchTab({ date, meal, onSaved, close }) {
 
   if (picked) return <Portion name={picked.name} brand={picked.brand} bases={picked.bases} meal={meal} tag={SOURCE_LABEL[picked.source]} busy={busy} onBack={() => setPicked(null)} onAdd={add} />
 
-  const notes = sourceNotes(state.data?.sources, { admin: isAdmin })
   const r = bc?.result
   return <>
     <div className="row" style={{ gap: 8 }}>
@@ -276,14 +322,9 @@ function SearchTab({ date, meal, onSaved, close }) {
         : <button className="linkbtn" onClick={() => openFoodSheet({ prefill: { name: r.name || '', ext: bc.code }, onSaved: () => { onSaved(); close() } })}>{nt('Add it as my food')}</button>}
     </div>}
 
-    {state.status === 'loading' && !state.data && <div className="muted small nut-empty">{nt('Searching…')}</div>}
-    {state.status === 'error' && <div className="nut-banner warn"><Icon name="warning" /><span>{state.error}</span><button className="linkbtn" onClick={() => run(text.trim())}>{nt('Try again')}</button></div>}
-    {state.data && <Notes notes={notes} onRetry={() => run(text.trim())} />}
-    {state.data && <div className={'nut-pick-list' + (state.status === 'loading' ? ' stale' : '')}>
-      {state.data.results.length === 0 && state.status !== 'error' && <div className="muted small nut-empty">{nt('Nothing found for “{0}”.', state.data.q)}</div>}
-      {state.data.results.map(h => <HitRow key={h.source + h.ext} hit={h} onPick={setPicked} />)}
-    </div>}
-    {state.status === 'idle' && !bc && !scanOpen && <div className="muted small nut-empty">{nt('Search Open Food Facts and USDA, or scan a barcode.')}</div>}
+    {per && <SearchResults per={per} q={asked.current || text.trim()} slow={slow} isAdmin={isAdmin} ai={ai}
+      onPick={setPicked} onRetry={id => search(asked.current, [id])} onDescribe={() => onDescribe(text.trim())} onQuick={() => onQuick(text.trim())} />}
+    {!per && !bc && !scanOpen && <div className="muted small nut-empty">{nt('Search Open Food Facts and USDA, or scan a barcode.')}</div>}
   </>
 }
 
@@ -293,10 +334,11 @@ function AddSheet({ date, meal: initial, onSaved, close }) {
   const [ai, setAi] = useState(null)               // GET /config's ai block: allowance and availability
   const [aiMode, setAiMode] = useState(null)       // null | 'photo' | 'text'
   const [carry, setCarry] = useState('')           // what the person typed before the AI failed
+  const [aiText, setAiText] = useState('')         // the search words, carried into Describe
   useEffect(() => { let live = true; nutri.getConfig().then(c => live && setAi(c.ai)).catch(() => {}); return () => { live = false } }, [])
 
-  if (aiMode) return <AiLog mode={aiMode} date={date} meal={meal} ai={ai} onAi={a => setAi(x => ({ ...x, ...a }))}
-    onBack={() => setAiMode(null)} onSaved={onSaved} close={close}
+  if (aiMode) return <AiLog mode={aiMode} initialText={aiText} date={date} meal={meal} ai={ai} onAi={a => setAi(x => ({ ...x, ...a }))}
+    onBack={() => { setAiMode(null); setAiText('') }} onSaved={onSaved} close={close}
     onManual={name => { setCarry(name || ''); setAiMode(null); setTab('quick') }} />
 
   const blocked = ai && (!ai.available || ai.remaining <= 0)
@@ -306,14 +348,15 @@ function AddSheet({ date, meal: initial, onSaved, close }) {
     <SelectRow title={nt('Meal')} sheetTitle={nt('Meal')} value={meal} onChange={setMeal} options={mealOptions()} />
     <div className="nut-ai-row">
       <Button icon="camera" variant="tinted" onClick={() => setAiMode('photo')} disabled={blocked}>{nt('Photo')}</Button>
-      <Button icon="sparkles" variant="tinted" onClick={() => setAiMode('text')} disabled={blocked}>{nt('Describe')}</Button>
+      <Button icon="sparkles" variant="tinted" onClick={() => { setAiText(''); setAiMode('text') }} disabled={blocked}>{nt('Describe')}</Button>
     </div>
     {why && <div className={'small nut-ai-why' + (blocked ? ' off' : '')}>{nt(why)}</div>}
     <Segmented value={tab} onChange={setTab} options={[{ value: 'search', label: nt('Search') }, { value: 'foods', label: nt('My foods') }, { value: 'quick', label: nt('Quick add') }]} />
     <div style={{ height: 12 }} />
     {tab === 'quick' ? <QuickAdd date={date} meal={meal} initialName={carry} onSaved={onSaved} close={close} />
       : tab === 'foods' ? <FoodPick date={date} meal={meal} onSaved={onSaved} close={close} />
-      : <SearchTab date={date} meal={meal} onSaved={onSaved} close={close} />}
+      : <SearchTab date={date} meal={meal} ai={ai} onSaved={onSaved} close={close}
+          onDescribe={text => { setAiText(text); setAiMode('text') }} onQuick={text => { setCarry(text); setTab('quick') }} />}
     <div style={{ height: 8 }} />
     <Button variant="ghost" className="dim" onClick={close}>{nt('Cancel')}</Button>
   </>

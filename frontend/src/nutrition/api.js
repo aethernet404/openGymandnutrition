@@ -24,7 +24,9 @@ export const putGoals = body => send('PUT', '/api/nutrition/goals', body)
 export const getAdmin = () => api('/api/admin/nutrition')
 export const putAdmin = body => send('PUT', '/api/admin/nutrition', body)
 
-export const searchFoods = (text, source = 'all') => api('/api/nutrition/search?' + q({ q: text, source }), { timeout: 20000 })
+// One source per request, so the fast one is on screen while the slow one is still working. The server
+// gives a source about 21 s (10 s, one retry at 8 s); the client waits a little longer than that.
+export const searchFoods = (text, source = 'all') => api('/api/nutrition/search?' + q({ q: text, source }), { timeout: 30000 })
 export const lookupBarcode = code => api('/api/nutrition/barcode?' + q({ code }), { timeout: 20000 })
 export const testUsda = () => send('POST', '/api/admin/nutrition/test-usda', {})
 

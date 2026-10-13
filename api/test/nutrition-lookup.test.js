@@ -73,14 +73,17 @@ test('USDA: the nested nutrient shape of the detail endpoint and kJ-only energy 
   assert.equal(normaliseUsda({ fdcId: 3, description: 'Water', foodNutrients: [] }), null);
 });
 
-test('search: both sources answer and are interleaved', async () => {
+test('search: both sources answer; the USDA reference food leads the rest', async () => {
   const urls = [];
   const lk = createLookup({ fetch: async url => { urls.push(String(url)); return String(url).includes('openfoodfacts') ? res({ products: [NUTELLA, KJ_ONLY, NO_NUTRITION] }) : res({ foods: [CHEDDAR, BRANDED] }); } });
-  const r = await lk.search('cheese', { usdaKey: 'KEY12345' });
-  assert.deepEqual(r.results.map(x => x.source), ['usda', 'off', 'usda', 'off']);
-  assert.deepEqual(r.sources.off, { ok: true, count: 2 });
-  assert.deepEqual(r.sources.usda, { ok: true, count: 2 });
-  assert.ok(urls.some(u => u.includes('api_key=KEY12345') && u.includes('query=cheese')));
+  const r = await lk.search('cheddar', { usdaKey: 'KEY12345' });
+  assert.equal(r.results[0].name, 'Cheese, Cheddar');
+  assert.equal(r.results[0].kind, 'sr');
+  assert.deepEqual(r.sources.usda, { ok: true, count: 1 });
+  assert.equal(r.sources.off.ok, true);
+  assert.ok(urls.some(u => u.includes('api_key=KEY12345') && u.includes('query=cheddar')));
+  assert.ok(urls.some(u => u.includes('Foundation%2CSR+Legacy')), 'reference foods are asked for on their own…');
+  assert.ok(urls.some(u => u.includes('dataType=Branded')), '…so the branded labels cannot crowd them out');
 });
 
 test('search without a USDA key says so and still returns Open Food Facts', async () => {
@@ -133,14 +136,24 @@ test('search really gives up on a source that hangs', async () => {
   } finally { clearInterval(keepAlive); }
 });
 
-test('search results are cached, failures are not', async () => {
-  let calls = 0, fail = true;
-  const lk = createLookup({ fetch: async () => { calls++; return fail ? res('', 500) : res({ products: [NUTELLA] }); } });
+test('search results are cached for a few minutes, failures are not, and identical searches in flight share one trip', async () => {
+  let calls = 0, fail = true, clock = 1000;
+  const lk = createLookup({ now: () => clock, sleep: async () => {}, fetch: async () => { calls++; return fail ? res('', 500) : res({ products: [NUTELLA] }); } });
   await lk.search('nutella', { sources: 'off' });
-  fail = false;
-  await lk.search('nutella', { sources: 'off' });   // the failure was not remembered
-  await lk.search('NUTELLA', { sources: 'off' });   // the success is, case-insensitively
-  assert.equal(calls, 2);
+  assert.equal(calls, 2, 'the ask and its one retry; nothing remembered');
+  fail = false; calls = 0;
+  await lk.search('nutella', { sources: 'off' });
+  const afterFirst = calls;
+  await lk.search('NUTELLA', { sources: 'off' });
+  assert.equal(calls, afterFirst, 'the success is remembered, case-insensitively');
+  clock += 6 * 60000;
+  await lk.search('nutella', { sources: 'off' });
+  assert.ok(calls > afterFirst, 'and forgotten after five minutes');
+
+  calls = 0;
+  const slow = createLookup({ fetch: async () => { calls++; await new Promise(r => setTimeout(r, 20)); return res({ products: [NUTELLA, NUTELLA, NUTELLA, NUTELLA, NUTELLA, NUTELLA] }); } });
+  await Promise.all([slow.search('nutella', { sources: 'off' }), slow.search('nutella', { sources: 'off' }), slow.search('Nutella', { sources: 'off' })]);
+  assert.ok(calls <= 2, `three simultaneous identical searches made ${calls} request(s)`);
 });
 
 test('barcode: found, unknown, known-without-nutrition, and source down', async () => {

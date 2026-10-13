@@ -22,7 +22,7 @@ switched Nutrition off.
 | `POST /api/nutrition/foods` | custom food `{name, brand?, serving?, grams?, per:{calories,protein_g,carbs_g,fat_g}, ext?}` |
 | `PUT /api/nutrition/foods?id=` | edit a custom food, or set `favorite` on any food |
 | `DELETE /api/nutrition/foods?id=` | already-logged entries keep their numbers |
-| `GET /api/nutrition/search?q=&source=all\|off\|usda` | Open Food Facts + USDA (key set by an admin), each hit as `bases[]` (label serving, 100 g). Per-source status in `sources`; one source down never fails the search. 40 lookups/min/profile |
+| `GET /api/nutrition/search?q=&source=all\|off\|usda` | Open Food Facts + USDA (key set by an admin), each hit as `bases[]` (label serving, 100 g). Only hits containing every typed word are returned, best first (`rank`, comparable across sources: USDA Foundation/SR Legacy reference foods lead). Per-source status in `sources`; ask `source=off` and `source=usda` separately and merge by `rank` to show whichever answers first. One source down never fails the search. A source that times out or errors is retried once. 40 lookups/min/profile |
 | `GET /api/nutrition/barcode?code=` | Open Food Facts product by 8–14 digit barcode |
 | `POST /api/nutrition/analyze` | `{kind:'photo', image:<base64 jpeg/png/webp>, note?}` or `{kind:'text', text}` → an editable **draft** (nothing saved). Coach's Claude Agent SDK path, inline image, own daily allowance |
 | `PUT /api/nutrition/coach-share` | `{share:boolean}` opt in/out of the numbers-only summary the Coach may read (default off) |
@@ -32,6 +32,14 @@ switched Nutrition off.
 
 The AI allowance is its own counter (`reserveAi` / `refundAi` in `store.js`), separate from the
 Coach's cap, counted per profile per UTC day.
+
+## Search behaviour
+`rank.js` decides relevance and order, `lookup.js` the transport. Timeouts: 10 s first try, 8 s retry, ~21 s
+budget per source. Identical searches are cached for 5 minutes and share an in-flight request. Open Food Facts is
+asked for English-language, US-market products first (sorted by popularity) and the whole catalogue only if that
+yields fewer than 5 relevant hits: `NUTRITION_OFF_COUNTRY` (default `united-states`) and `NUTRITION_OFF_LANG`
+(default `english`); set either to an empty string to switch that filter off. An answer of an unexpected shape is a
+failure and is logged (service, kind, HTTP status and top-level key names only), at most once a minute per service.
 
 ## Outbound network
 `world.openfoodfacts.org` (search, barcode) and `api.nal.usda.gov` (only when a key is set), HTTPS, 6 s

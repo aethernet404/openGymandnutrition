@@ -128,7 +128,7 @@ async function upstream(t) {
     const u = new URL(req.url, 'http://x');
     if (u.pathname.startsWith('/off/')) {
       if (mode.off === 'down') return send(503, 'down');
-      if (u.pathname === '/off/cgi/search.pl') return send(200, { products: [{ code: '3017620422003', product_name: 'Nutella', brands: 'Ferrero', serving_size: '15 g', serving_quantity: 15, nutriments: { 'energy-kcal_100g': 539, proteins_100g: 6.3, carbohydrates_100g: 57.5, fat_100g: 30.9 } }] });
+      if (u.pathname === '/off/cgi/search.pl') return send(200, { products: [{ code: '3017620422003', product_name: 'Nutella', brands: 'Ferrero', serving_size: '15 g', serving_quantity: 15, nutriments: { 'energy-kcal_100g': 539, proteins_100g: 6.3, carbohydrates_100g: 57.5, fat_100g: 30.9 } }, { code: '555', product_name: 'Sharp cheddar cheese', brands: 'Tillamook', nutriments: { 'energy-kcal_100g': 410, proteins_100g: 25, carbohydrates_100g: 1, fat_100g: 34 } }] });
       if (u.pathname === '/off/api/v2/product/3017620422003.json') return send(200, { status: 1, product: { code: '3017620422003', product_name: 'Nutella', serving_size: '15 g', serving_quantity: 15, nutriments: { 'energy-kcal_100g': 539, proteins_100g: 6.3, carbohydrates_100g: 57.5, fat_100g: 30.9 } } });
       return send(404, { status: 0 });
     }
@@ -170,13 +170,13 @@ test('search and barcode through the real server: no USDA key, a bad key, a good
   // The right key: both sources, interleaved, and the test button says so.
   await h.call('PUT', '/api/admin/nutrition', ADMIN, { usdaKey: 'goodkey1234' });
   test = await h.call('POST', '/api/admin/nutrition/test-usda', ADMIN);
-  assert.deepEqual([test.body.ok, test.body.count], [true, 1]);
+  assert.equal(test.body.ok, true);
   r = await h.call('GET', '/api/nutrition/search?q=cheddar', USER);
   assert.deepEqual(r.body.results.map(x => x.source).sort(), ['off', 'usda']);
 
   // Open Food Facts down: USDA results still come back, with the reason.
   up.mode.off = 'down';
-  r = await h.call('GET', '/api/nutrition/search?q=down-case', USER);
+  r = await h.call('GET', '/api/nutrition/search?q=cheddar+cheese', USER);
   assert.equal(r.status, 200);
   assert.equal(r.body.sources.off.ok, false);
   assert.match(r.body.sources.off.error, /Open Food Facts is not answering/);

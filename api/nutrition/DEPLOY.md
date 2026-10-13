@@ -26,7 +26,9 @@ kubectl -n <ns> get deploy/<deployment> -o jsonpath='{.spec.replicas}{"\n"}'   #
 ```
 
 ## Settings, env vars, network
-- **No new env vars, volumes, ports or secrets.** Nutrition data is `/data/nutrition/` on the existing PVC.
+- **Optional env vars (api container), none required:** `NUTRITION_OFF_COUNTRY` (default `united-states`) and
+  `NUTRITION_OFF_LANG` (default `english`) choose which Open Food Facts products are preferred; empty = no filter.
+- **No new volumes, ports or secrets.** Nutrition data is `/data/nutrition/` on the existing PVC.
 - **Outbound HTTPS from the api container** (egress policies / proxies must allow it):
   - `world.openfoodfacts.org:443` — food search and barcodes (always)
   - `api.nal.usda.gov:443` — USDA search (only once an admin has pasted a USDA key)

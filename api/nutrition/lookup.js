@@ -1,30 +1,46 @@
 /* Food lookups: Open Food Facts (search + barcode) and USDA FoodData Central (search).
  *
  * The outside world is slow, rate-limited and sometimes down, and its data is uneven, so this
- * module is written around three rules:
+ * module is written around these rules:
  *
  *   1. A source failing is a RESULT, not an exception. search() always answers with whatever the
- *      other source found, plus a per-source status the app can show ("Open Food Facts is not
- *      answering"), instead of an error page for the whole search.
- *   2. Everything is normalised once, here. A hit is { source, ext, name, brand, bases[] } where
- *      each base is one way to measure a portion — "1 serving (30 g)" or "100 g" — with its
- *      calories and macros for exactly that portion. The app never sees per-100 g vs per-serving
- *      field names, and an entry can always be priced as qty × base.
- *   3. Nothing is trusted. Numbers are bounded and rounded, text is cleaned, and a product with no
- *      usable calorie figure is dropped rather than shown as 0 kcal.
+ *      sources that worked found, plus a per-source status the app can show ("Open Food Facts did
+ *      not answer in time"). The app asks for each source separately, so a slow one never holds
+ *      back a fast one.
+ *   2. A source that times out or errors gets ONE automatic retry before it is reported as failed
+ *      (not for a rejected key or a rate limit: asking again only makes those worse), inside an
+ *      overall time budget so a dead source cannot hold a request for long.
+ *   3. Everything is normalised once, here. A hit is { source, kind, ext, name, brand, bases[] }
+ *      where each base is one way to measure a portion — "1 cookie (28 g)" or "100 g" — with its
+ *      calories and macros for exactly that portion. An entry is always priced as qty × base.
+ *   4. Nothing is trusted. Numbers are bounded and rounded, text is cleaned, a serving size must be
+ *      believable (rank.js), a product with no calorie figure is dropped rather than shown as 0 kcal,
+ *      and a response that is not the shape documented is a failure that is logged (once a minute,
+ *      shape only — never the query, never a user's words).
+ *   5. What is shown is what matches. Hits are filtered to those that contain every word typed and
+ *      ordered by rank.js: USDA's reference foods first, then the rest by closeness.
  *
- * `fetch` is injected so the tests never touch the network; the base URLs can be overridden by env
- * (a mirror, or a local stand-in in the end-to-end test).
+ * `fetch` is injected so the tests never touch the network; the base URLs, and the country and
+ * language Open Food Facts results are preferred in, can be set by env.
  */
 import { clean, round } from './validate.js';
+import { rankHits, chooseServingGrams, servingLabel } from './rank.js';
 
 const OFF_BASE = () => (process.env.NUTRITION_OFF_BASE || 'https://world.openfoodfacts.org').replace(/\/$/, '');
 const USDA_BASE = () => (process.env.NUTRITION_USDA_BASE || 'https://api.nal.usda.gov/fdc/v1').replace(/\/$/, '');
+// Preferred market and language for Open Food Facts search (tags as in its URLs). Empty = no filter.
+const OFF_COUNTRY = () => process.env.NUTRITION_OFF_COUNTRY ?? 'united-states';
+const OFF_LANG = () => process.env.NUTRITION_OFF_LANG ?? 'english';
 
-export const TIMEOUT_MS = 6000;
+// Open Food Facts is a volunteer-run service whose search regularly takes 3–8 s; the old 6 s was
+// cutting off answers that were on their way. First attempt 10 s, the retry 8 s, and the whole
+// source gives up after about 21 s.
+export const TIMEOUT_MS = 10000;
+export const RETRY_TIMEOUT_MS = 8000;
+const RETRY_DELAY_MS = 300;
 const MAX_BYTES = 2 * 1024 * 1024;
 const MAX_RESULTS = 20;
-const SEARCH_TTL = 10 * 60000;
+const SEARCH_TTL = 5 * 60000;           // briefly: the same words typed again in the next few minutes
 const BARCODE_TTL = 60 * 60000;
 const CACHE_MAX = 200;
 
@@ -41,13 +57,14 @@ const WORDS = {
   bad: 'sent something unreadable'
 };
 export const describe = (name, err) => `${name} ${WORDS[err.kind] || WORDS.down}`;
+const RETRYABLE = new Set(['timeout', 'down', 'bad']);
 
 const num = v => { const n = typeof v === 'string' && v.trim() !== '' ? Number(v) : v; return typeof n === 'number' && Number.isFinite(n) ? n : null; };
 const clampMacro = (v, max) => (v == null ? null : Math.min(max, Math.max(0, v)));
 
 /* ------------------------------ Open Food Facts ------------------------------ */
 
-const OFF_FIELDS = 'code,product_name,product_name_en,brands,serving_size,serving_quantity,quantity,nutriments';
+const OFF_FIELDS = 'code,product_name,product_name_en,brands,serving_size,serving_quantity,quantity,nutriments,countries_tags,lang';
 
 /** kcal from a nutriments block, for a suffix ('_100g' | '_serving'). kJ is converted if kcal is absent. */
 function offKcal(n, suffix) {
@@ -70,19 +87,23 @@ const scalePer = (per, k) => ({
   calories: Math.round(per.calories * k), protein_g: round(per.protein_g * k, 1), carbs_g: round(per.carbs_g * k, 1), fat_g: round(per.fat_g * k, 1)
 });
 
-/** Serving first (what people eat), then 100 g. Returns [] when there is no calorie figure at all. */
+/**
+ * Serving first (what people eat), then 100 g. Returns [] when there is no calorie figure at all.
+ * The serving's numbers come from the per-100 g figures and the believed weight; the pack's own
+ * "per serving" figures are used only when they agree with that (they are often a typo'd copy).
+ */
 function offBases(p) {
   const n = p.nutriments && typeof p.nutriments === 'object' ? p.nutriments : {};
   const per100 = offPer(n, '_100g');
-  const grams = num(p.serving_quantity);
+  const grams = chooseServingGrams(num(p.serving_quantity), p.serving_size);
   const bases = [];
-  const sGrams = grams != null && grams > 0 && grams <= 5000 ? round(grams, 1) : null;
-  let perServing = offPer(n, '_serving');
-  if (!perServing && per100 && sGrams) perServing = scalePer(per100, sGrams / 100);
-  if (perServing) {
-    const label = clean(p.serving_size, 60) || (sGrams ? `${sGrams} g` : '1 serving');
-    bases.push({ label, grams: sGrams, per: perServing });
-  }
+  let perServing = null;
+  const declared = offPer(n, '_serving');
+  if (grams && per100) {
+    perServing = scalePer(per100, grams / 100);
+    if (declared && per100.calories > 0 && Math.abs(declared.calories - perServing.calories) <= Math.max(15, 0.25 * perServing.calories)) perServing = declared;
+  } else if (declared && !per100) perServing = declared;
+  if (perServing && (grams || !per100)) bases.push({ label: servingLabel(p.serving_size, grams), grams: grams ?? null, per: perServing });
   if (per100) bases.push({ label: '100 g', grams: 100, per: per100 });
   return bases;
 }
@@ -94,7 +115,9 @@ export function normaliseOff(p) {
   if (!code || !name) return null;
   const bases = offBases(p);
   if (!bases.length) return null;
-  return { source: 'off', ext: code, name, brand: clean(String(p.brands || '').split(',')[0], 60), bases };
+  const countries = Array.isArray(p.countries_tags) ? p.countries_tags : [];
+  const preferred = countries.some(c => /united-states$/.test(String(c))) && (p.lang === 'en' || !!p.product_name_en);
+  return { source: 'off', kind: 'off', ext: code, name, brand: clean(String(p.brands || '').split(',')[0], 60), bases, preferred };
 }
 
 /* ------------------------------ USDA FoodData Central ------------------------------ */
@@ -109,6 +132,7 @@ const valueOf = (list, ids) => {
   return null;
 };
 const titleCase = s => (s === s.toUpperCase() && /[A-Z]{3}/.test(s) ? s.toLowerCase().replace(/(^|[\s(,/-])([a-z])/g, (_, a, b) => a + b.toUpperCase()) : s);
+const USDA_KIND = { 'foundation': 'foundation', 'sr legacy': 'sr', 'branded': 'branded' };
 
 export function normaliseUsda(f) {
   if (!f || typeof f !== 'object' || f.fdcId == null) return null;
@@ -125,20 +149,22 @@ export function normaliseUsda(f) {
   const name = titleCase(clean(f.description, 120));
   if (!name) return null;
   const bases = [];
-  // Branded foods list their label serving; the generic datasets are per 100 g only.
+  // Branded foods list their label serving; the reference datasets are per 100 g only.
   const unit = String(f.servingSizeUnit || '').toLowerCase();
   const size = num(f.servingSize);
-  if (size != null && size > 0 && size <= 5000 && ['g', 'grm', 'ml', 'mlt'].includes(unit)) {
+  const grams = ['g', 'grm', 'ml', 'mlt'].includes(unit) ? chooseServingGrams(size, '') : null;
+  if (grams) {
     const household = clean(f.householdServingFullText, 40);
-    bases.push({ label: household ? `${household} (${round(size, 1)} g)` : `${round(size, 1)} g`, grams: round(size, 1), per: scalePer(per100, size / 100) });
+    bases.push({ label: household ? `${household} (${round(grams, 1)} g)` : `${round(grams, 1)} g`, grams: round(grams, 1), per: scalePer(per100, grams / 100) });
   }
   bases.push({ label: '100 g', grams: 100, per: per100 });
-  return { source: 'usda', ext: String(f.fdcId), name, brand: titleCase(clean(f.brandName || f.brandOwner, 60)), bases };
+  const kind = USDA_KIND[String(f.dataType || '').toLowerCase()] || 'other';
+  return { source: 'usda', kind, ext: String(f.fdcId), name, brand: titleCase(clean(f.brandName || f.brandOwner, 60)), bases };
 }
 
 /* ------------------------------ transport ------------------------------ */
 
-async function getJson(fetchFn, url, { headers, timeoutMs = TIMEOUT_MS } = {}) {
+async function getJson(fetchFn, url, { headers, timeoutMs }) {
   let res;
   try {
     res = await fetchFn(url, { headers, signal: AbortSignal.timeout(timeoutMs), redirect: 'follow' });
@@ -148,18 +174,35 @@ async function getJson(fetchFn, url, { headers, timeoutMs = TIMEOUT_MS } = {}) {
   if (res.status === 429) throw new LookupError('rate', 'HTTP 429');
   if (res.status === 401 || res.status === 403) throw new LookupError('auth', 'HTTP ' + res.status);
   if (res.status >= 500) throw new LookupError('down', 'HTTP ' + res.status);
-  if (res.status === 404) return { notFound: true };
+  if (res.status === 404) return { notFound: true, status: 404 };
   if (!res.ok) throw new LookupError('bad', 'HTTP ' + res.status);
   let text;
   try { text = await res.text(); } catch (e) { throw new LookupError(e?.name === 'TimeoutError' ? 'timeout' : 'down', String(e?.message || e)); }
   if (text.length > MAX_BYTES) throw new LookupError('bad', 'response too large');
-  try { return { data: JSON.parse(text) }; } catch { throw new LookupError('bad', 'not JSON'); }
+  try { return { data: JSON.parse(text), status: res.status }; } catch { throw new LookupError('bad', 'not JSON'); }
+}
+
+/* An answer that is JSON but not the shape the service documents is logged — once a minute per
+   service and kind, with the HTTP status and the names of the top-level keys and nothing else:
+   no query, no barcode, no value. Enough to see that an API changed; nothing to leak. */
+const loggedAt = new Map();
+function logShape(source, kind, status, data, now) {
+  const key = source + '|' + kind;
+  if (now() - (loggedAt.get(key) || 0) < 60000) return;
+  loggedAt.set(key, now());
+  const keys = data && typeof data === 'object' && !Array.isArray(data) ? Object.keys(data).slice(0, 8).map(k => String(k).replace(/[^\w-]/g, '').slice(0, 24)).join(',') : (Array.isArray(data) ? 'array' : typeof data);
+  console.error(`nutrition: ${source} ${kind} returned an unexpected response shape (HTTP ${status}; top-level keys: ${keys || 'none'})`);
 }
 
 /* ------------------------------ the service ------------------------------ */
 
-export function createLookup({ fetch: fetchFn = globalThis.fetch, now = Date.now, timeoutMs = TIMEOUT_MS, userAgent = 'openGym-nutrition (self-hosted)' } = {}) {
+export function createLookup({
+  fetch: fetchFn = globalThis.fetch, now = Date.now, sleep = ms => new Promise(r => setTimeout(r, ms)),
+  timeoutMs = TIMEOUT_MS, retryTimeoutMs = Math.min(RETRY_TIMEOUT_MS, timeoutMs), retryDelayMs = RETRY_DELAY_MS,
+  budgetMs = timeoutMs + retryTimeoutMs + 3000, userAgent = 'openGym-nutrition (self-hosted)'
+} = {}) {
   const cache = new Map();
+  const inflight = new Map();
   const remember = (key, value, ttl) => {
     if (cache.size >= CACHE_MAX) cache.delete(cache.keys().next().value);
     cache.set(key, { value, until: now() + ttl });
@@ -173,52 +216,105 @@ export function createLookup({ fetch: fetchFn = globalThis.fetch, now = Date.now
   };
   const headers = { 'User-Agent': userAgent, Accept: 'application/json' };
 
+  /** One request, retried once if the source timed out, errored or sent rubbish; inside `deadline`. */
+  async function fetchRetry(url, deadline) {
+    let err;
+    for (let n = 0; n < 2; n++) {
+      const left = deadline - now();
+      if (n > 0 && left < 1500) break;
+      try { return { ...(await getJson(fetchFn, url, { headers, timeoutMs: Math.max(200, Math.min(n === 0 ? timeoutMs : retryTimeoutMs, left)) })), retried: n }; }
+      catch (e) {
+        err = e instanceof LookupError ? e : new LookupError('down', String(e));
+        if (!RETRYABLE.has(err.kind)) break;
+        if (n === 0) await sleep(retryDelayMs);
+      }
+    }
+    throw err;
+  }
+
+  /** The `products`/`foods` array of an answer, or a LookupError('bad') (and a log line) if it is not one. */
+  function listOf(source, kind, r, field) {
+    const list = r.data?.[field];
+    if (!Array.isArray(list)) { logShape(source, kind, r.status, r.data, now); throw new LookupError('bad', 'unexpected shape'); }
+    return list;
+  }
+
+  const offUrl = (q, filtered) => `${OFF_BASE()}/cgi/search.pl?` + new URLSearchParams({
+    search_terms: q, search_simple: '1', action: 'process', json: '1', page_size: '40', fields: OFF_FIELDS, sort_by: 'unique_scans_n',
+    ...(filtered && OFF_LANG() ? { tagtype_0: 'languages', tag_contains_0: 'contains', tag_0: OFF_LANG() } : {}),
+    ...(filtered && OFF_COUNTRY() ? { tagtype_1: 'countries', tag_contains_1: 'contains', tag_1: OFF_COUNTRY() } : {})
+  });
+
   async function searchOff(q) {
     const key = 'off|' + q.toLowerCase();
     const hit = recall(key); if (hit) return hit;
-    const url = `${OFF_BASE()}/cgi/search.pl?` + new URLSearchParams({ search_terms: q, search_simple: '1', action: 'process', json: '1', page_size: '24', fields: OFF_FIELDS });
-    const r = await getJson(fetchFn, url, { headers, timeoutMs });
-    const items = Array.isArray(r.data?.products) ? r.data.products : [];
-    return remember(key, items.map(normaliseOff).filter(Boolean).slice(0, MAX_RESULTS), SEARCH_TTL);
+    const deadline = now() + budgetMs;
+    const filtered = !!(OFF_COUNTRY() || OFF_LANG());
+    const r1 = await fetchRetry(offUrl(q, filtered), deadline);
+    let hits = rankHits(listOf('Open Food Facts', 'search', r1, 'products').map(normaliseOff).filter(Boolean), q);
+    // The preferred market is a preference, not a wall: too few good matches there (or none, which
+    // is also what an overloaded index tends to answer) and the whole catalogue is asked as well.
+    if (filtered && hits.length < 5 && deadline - now() > 2500) {
+      try {
+        const r2 = await fetchRetry(offUrl(q, false), deadline);
+        const more = rankHits(listOf('Open Food Facts', 'search', r2, 'products').map(normaliseOff).filter(Boolean), q);
+        hits = rankHits([...hits, ...more], q);
+      } catch (e) {
+        // The first answer is good enough to show if it had anything in it; otherwise say what failed.
+        if (!hits.length) throw e;
+      }
+    }
+    return remember(key, hits.slice(0, MAX_RESULTS), SEARCH_TTL);
   }
 
   async function searchUsda(q, apiKey) {
     const key = 'usda|' + q.toLowerCase();
     const hit = recall(key); if (hit) return hit;
-    const url = `${USDA_BASE()}/foods/search?` + new URLSearchParams({ api_key: apiKey, query: q, pageSize: '24', dataType: 'Foundation,SR Legacy,Branded' });
-    const r = await getJson(fetchFn, url, { headers, timeoutMs });
-    const items = Array.isArray(r.data?.foods) ? r.data.foods : [];
-    return remember(key, items.map(normaliseUsda).filter(Boolean).slice(0, MAX_RESULTS), SEARCH_TTL);
+    const deadline = now() + budgetMs;
+    const url = types => `${USDA_BASE()}/foods/search?` + new URLSearchParams({ api_key: apiKey, query: q, pageSize: '25', dataType: types });
+    // Two requests, so that the plain reference foods are never crowded out by the thousands of
+    // branded labels: the reference foods are asked for on their own.
+    const [generic, branded] = await Promise.allSettled([
+      fetchRetry(url('Foundation,SR Legacy'), deadline),
+      fetchRetry(url('Branded'), deadline)
+    ]);
+    if (generic.status === 'rejected' && branded.status === 'rejected') throw generic.reason;
+    const take = r => (r.status === 'fulfilled' ? listOf('USDA FoodData Central', 'search', r.value, 'foods').map(normaliseUsda).filter(Boolean) : []);
+    // A failure of only one of the two is shown as what it is: results from the other.
+    return remember(key, rankHits([...take(generic), ...take(branded)], q).slice(0, MAX_RESULTS), SEARCH_TTL);
+  }
+
+  /** Identical searches asked at once share one trip to the service. */
+  function once(key, make) {
+    if (inflight.has(key)) return inflight.get(key);
+    const p = make().finally(() => inflight.delete(key));
+    inflight.set(key, p);
+    return p;
   }
 
   /**
    * @param {string} q
-   * @param {{ usdaKey?: string|null, sources?: 'all'|'off'|'usda' }} o
+   * @param {{ usdaKey?: string|null, sources?: 'all'|'off'|'usda', fresh?: boolean }} o
    * @returns {{ results: object[], sources: Record<string, {ok:boolean, skipped?:string, error?:string, kind?:string, count?:number}> }}
+   *   `results` are ranked best first; `rank` is comparable across sources.
    */
   async function search(q, { usdaKey = null, sources = 'all', fresh = false } = {}) {
     if (fresh) for (const k of [...cache.keys()]) if (k.startsWith('usda|')) cache.delete(k);
     const status = {};
+    const lists = {};
     const jobs = [];
-    const run = (id, name, p) => jobs.push(p.then(
-      list => { status[id] = { ok: true, count: list.length }; return list; },
-      err => { status[id] = { ok: false, kind: err.kind || 'down', error: describe(name, err instanceof LookupError ? err : new LookupError('down')) }; return []; }
+    const run = (id, name, make) => jobs.push(make().then(
+      list => { status[id] = { ok: true, count: list.length }; lists[id] = list; },
+      err => { status[id] = { ok: false, kind: err.kind || 'down', error: describe(name, err instanceof LookupError ? err : new LookupError('down')) }; lists[id] = []; }
     ));
-    if (sources === 'all' || sources === 'off') run('off', 'Open Food Facts', searchOff(q));
+    if (sources === 'all' || sources === 'off') run('off', 'Open Food Facts', () => once('off|' + q.toLowerCase(), () => searchOff(q)));
     if (sources === 'all' || sources === 'usda') {
-      if (usdaKey) run('usda', 'USDA FoodData Central', searchUsda(q, usdaKey));
+      if (usdaKey) run('usda', 'USDA FoodData Central', () => once('usda|' + q.toLowerCase(), () => searchUsda(q, usdaKey)));
       else status.usda = { ok: false, skipped: 'no-key' };
     }
-    const lists = await Promise.all(jobs);
-    // Interleave so neither source buries the other, USDA's generic foods first at each rank.
-    // `lists` follows the order the jobs were started in: off, then usda.
-    const byId = {};
-    let i = 0;
-    for (const id of ['off', 'usda']) if (id in status && !status[id].skipped) byId[id] = lists[i++];
-    const out = [];
-    const a = byId.usda || [], b = byId.off || [];
-    for (let k = 0; k < Math.max(a.length, b.length); k++) { if (a[k]) out.push(a[k]); if (b[k]) out.push(b[k]); }
-    return { results: out.slice(0, MAX_RESULTS * 2), sources: status };
+    await Promise.all(jobs);
+    const results = [...(lists.usda || []), ...(lists.off || [])].sort((a, b) => b.rank - a.rank);
+    return { results: results.slice(0, MAX_RESULTS * 2), sources: status };
   }
 
   /** @returns {{ found: boolean, product?: object, error?: string, kind?: string }} */
@@ -226,7 +322,8 @@ export function createLookup({ fetch: fetchFn = globalThis.fetch, now = Date.now
     const key = 'bc|' + code;
     const hit = recall(key); if (hit) return hit;
     try {
-      const r = await getJson(fetchFn, `${OFF_BASE()}/api/v2/product/${encodeURIComponent(code)}.json?fields=${OFF_FIELDS}`, { headers });
+      const r = await fetchRetry(`${OFF_BASE()}/api/v2/product/${encodeURIComponent(code)}.json?fields=${OFF_FIELDS}`, now() + budgetMs);
+      if (!r.notFound && (!r.data || typeof r.data !== 'object' || Array.isArray(r.data))) { logShape('Open Food Facts', 'barcode', r.status, r.data, now); throw new LookupError('bad', 'unexpected shape'); }
       const p = r.notFound ? null : (r.data?.status === 0 ? null : r.data?.product);
       const product = p ? normaliseOff({ ...p, code: p.code || code }) : null;
       if (product) return remember(key, { found: true, product }, BARCODE_TTL);
