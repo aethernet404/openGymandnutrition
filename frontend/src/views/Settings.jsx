@@ -418,6 +418,7 @@ export default function Settings({ page = null, find = null, via = null }) {
   const open = id => {
     if (id === 'coach') { nav('/coach/setup'); return }
     if (id === 'nutrition') { nav('/nutrition'); return }
+    if (id === 'apple-health') { nav('/nutrition/health'); return }
     nav('/settings/' + id)
   }
   // Back the way you came when there is a way (the browser's back, Android's back, this button
@@ -963,7 +964,10 @@ function SettingsRoot({ ctx, preview, open, user, sync, home, go }) {
             value={preview[id]?.() || null} accessory="chevron" onClick={() => open(id)} className="sp-root-row" />)}
         </Section>
       ))}
-      {user && <Section><Row icon="flame" iconTint="var(--green)" title="Nutrition" accessory="chevron" onClick={() => open('nutrition')} className="sp-root-row" /></Section>}
+      {user && <Section>
+        <Row icon="flame" iconTint="var(--green)" title="Nutrition" accessory="chevron" onClick={() => open('nutrition')} className="sp-root-row" />
+        <Row icon="heart" iconTint="var(--red)" title="Apple Health" accessory="chevron" onClick={() => open('apple-health')} className="sp-root-row" />
+      </Section>}
       <div className="dim small sp-version">openGym v{__APP_VERSION__}</div>
     </>}
   </div>

@@ -42,3 +42,5 @@ export const getWeight = date => api('/api/nutrition/weight?' + q({ date }))
 // Admin only: the shape of the last Health Auto Export payload (the option is off by default).
 export const getHealthDebug = () => api('/api/admin/nutrition/health-debug')
 export const clearHealthDebug = () => send('DELETE', '/api/admin/nutrition/health-debug')
+// Everything the Apple Health stats page and the Home card show: per-day figures (null = never sent), recent workouts, weight.
+export const getHealthHistory = (date, days = 30) => api('/api/nutrition/health/history?' + q({ date, days }))

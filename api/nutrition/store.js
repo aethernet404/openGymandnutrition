@@ -122,6 +122,37 @@ export function weightView(d, today, days = 30) {
   return { latest: latest ? { date: latest.date, kg: latest.kg } : null, readings: all.filter(w => w.date >= since).map(w => ({ date: w.date, kg: w.kg })), count: all.length };
 }
 
+/**
+ * The Apple Health numbers for the `days` days ending at `to` (oldest first), for the stats page and the Home
+ * card. Every day in the range is present; a figure Health never sent for that day is null, not 0, so the page
+ * can tell "no data" from "a real zero". Burned is active + resting only — workout calories are display.
+ * Also: recent workouts (newest first), the weight view, the newest update time, and whether any data exists.
+ */
+export function healthHistory(d, to, days = 30, maxWorkouts = 30) {
+  const h = d.health || {};
+  const out = [];
+  for (let i = days - 1; i >= 0; i--) {
+    const dt = new Date(to + 'T12:00:00Z'); dt.setUTCDate(dt.getUTCDate() - i);
+    const date = dt.toISOString().slice(0, 10);
+    const e = h.days?.[date], a = h.activity?.[date];
+    out.push({
+      date,
+      active_kcal: e ? e.active : null, resting_kcal: e ? e.resting : null,
+      burned_kcal: e ? round(e.active + e.resting, 1) : null,
+      steps: e?.steps ?? null,
+      exercise_min: a?.exerciseMin ?? null,
+      workouts: a?.workouts?.length ? a.workouts : [],
+      updatedAt: Math.max(e?.updatedAt || 0, a?.updatedAt || 0) || null
+    });
+  }
+  const workouts = [];
+  for (const day of [...out].reverse()) for (const w of [...day.workouts].sort((x, y) => (x.time < y.time ? 1 : -1))) if (workouts.length < maxWorkouts) workouts.push({ date: day.date, ...w });
+  const weight = weightView(d, to, 30);
+  const stamps = [...Object.values(h.days || {}), ...Object.values(h.activity || {}), ...(h.weights || [])].map(x => x.updatedAt || x.at || 0);
+  const updatedAt = stamps.length ? Math.max(...stamps) : null;
+  return { from: out[0].date, to, days: out, workouts, weight, updatedAt, hasData: stamps.length > 0, token: !!h.token };
+}
+
 export function dayView(d, date) {
   const entries = d.days[date]?.entries || [];
   const byMeal = {};

@@ -22,7 +22,7 @@ const m = vi.hoisted(() => ({
   api: {
     getDay: vi.fn(), getConfig: vi.fn(), addEntries: vi.fn(), updateEntry: vi.fn(), deleteEntry: vi.fn(),
     listFoods: vi.fn(), createFood: vi.fn(), updateFood: vi.fn(), deleteFood: vi.fn(), getGoals: vi.fn(), putGoals: vi.fn(),
-    getAdmin: vi.fn(), putAdmin: vi.fn(), getRange: vi.fn(), searchFoods: vi.fn(), lookupBarcode: vi.fn(), testUsda: vi.fn(), analyze: vi.fn(), setCoachShare: vi.fn(), createHealthToken: vi.fn(), revokeHealthToken: vi.fn(), putHealthSettings: vi.fn(), getHealthToken: vi.fn(), getWeight: vi.fn(), getHealthDebug: vi.fn(), clearHealthDebug: vi.fn()
+    getAdmin: vi.fn(), putAdmin: vi.fn(), getRange: vi.fn(), searchFoods: vi.fn(), lookupBarcode: vi.fn(), testUsda: vi.fn(), analyze: vi.fn(), setCoachShare: vi.fn(), createHealthToken: vi.fn(), revokeHealthToken: vi.fn(), putHealthSettings: vi.fn(), getHealthToken: vi.fn(), getWeight: vi.fn(), getHealthHistory: vi.fn(), getHealthDebug: vi.fn(), clearHealthDebug: vi.fn()
   }
 }))
 
@@ -53,6 +53,8 @@ const { default: Nutrition } = await import('./Nutrition.jsx')
 const { default: Goals } = await import('./Goals.jsx')
 const { default: Foods } = await import('./Foods.jsx')
 const { default: Health } = await import('./Health.jsx')
+const { default: AppleHealth } = await import('./AppleHealth.jsx')
+const { default: HealthHomeCard } = await import('./HealthHomeCard.jsx')
 const { openAddSheet, openEditEntry, openFoodSheet } = await import('./sheets.jsx')
 
 let host, root
@@ -1326,5 +1328,188 @@ describe('Edit entry: change how much you ate', () => {
     expect(patchOf().calories).toBe(90)
     const s2 = await open({ id: 'older', meal: 'snack', name: 'Odd', calories: 10, qty: 0 })           // missing macros, qty 0
     expect(s2.el.textContent).toContain('Edit entry')
+  })
+})
+
+/* ------------------------------ Apple Health: Home card and stats page ------------------------------ */
+
+const isoShift = n => { const d = new Date(today + 'T12:00:00'); d.setDate(d.getDate() + n); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` }
+const blankDay = date => ({ date, active_kcal: null, resting_kcal: null, burned_kcal: null, steps: null, exercise_min: null, workouts: [], updatedAt: null })
+/** A 30-day history; `fill(i, day)` may add figures to day i (0 = 29 days ago, 29 = today). */
+const history = (over = {}, fill = () => {}) => {
+  const days = Array.from({ length: 30 }, (_, i) => blankDay(isoShift(i - 29)))
+  days.forEach((d, i) => fill(i, d))
+  return { from: days[0].date, to: today, days, workouts: [], weight: { latest: null, readings: [], count: 0 }, updatedAt: null, hasData: false, token: false, ...over }
+}
+const fullHistory = () => history({
+  hasData: true, token: true, updatedAt: new Date().setHours(9, 41, 0, 0),
+  weight: { latest: { date: isoShift(-1), kg: 80 }, readings: [{ date: isoShift(-20), kg: 82 }, { date: isoShift(-1), kg: 80 }], count: 2 },
+  workouts: [{ date: isoShift(-1), time: '18:30', name: 'Strength Training', duration_min: 45, kcal: 320, km: null }, { date: isoShift(-2), time: '07:05', name: 'Running', duration_min: 30, kcal: 250, km: 5.2 }]
+}, (i, d) => {
+  if (i >= 20) Object.assign(d, { active_kcal: 600, resting_kcal: 1700, burned_kcal: 2300 + i * 10, steps: 8000 + i * 100, exercise_min: 40, updatedAt: 1 })
+  if (i === 29) Object.assign(d, { burned_kcal: 2100, active_kcal: 450, resting_kcal: 1650, steps: 5400, exercise_min: 25, workouts: [{ time: '07:00', name: 'Yoga', duration_min: 30, kcal: null, km: null }] })
+})
+
+describe('Apple Health Home card', () => {
+  it('with data: today’s burned, steps, exercise minutes, latest weight and the update time; opens the stats page', async () => {
+    m.api.getHealthHistory.mockResolvedValue(fullHistory())
+    await mount(<HealthHomeCard />)
+    expect(m.api.getHealthHistory).toHaveBeenCalledWith(today, 1)
+    const t = text()
+    expect(t).toContain('Apple Health')
+    expect(t).toMatch(/2,?100 kcal/)
+    expect(t).toMatch(/5,?400 steps/)
+    expect(t).toContain('25 exercise min')
+    expect(t).toContain('80 kg')
+    expect(t).toMatch(/Updated .*(9:41|09:41)/)
+    expect(t).not.toContain('Set up Apple Health')
+    await click(host.querySelector('.card'))
+    expect(where).toBe('/nutrition/apple-health')
+  })
+
+  it('the weight follows the kg/lb setting', async () => {
+    m.unit = 'lb'
+    m.api.getHealthHistory.mockResolvedValue(fullHistory())
+    await mount(<HealthHomeCard />)
+    expect(text()).toContain('176.4 lb')
+  })
+
+  it('no token and no data: a short setup prompt (no zeros) that opens the setup screen', async () => {
+    m.api.getHealthHistory.mockResolvedValue(history())
+    await mount(<HealthHomeCard />)
+    expect(text()).toContain('Set up Apple Health')
+    expect(text()).not.toMatch(/kcal|\b0\b/)
+    await click(host.querySelector('.card'))
+    expect(where).toBe('/nutrition/health')
+  })
+
+  it('a token but nothing received yet: says it is waiting, no zeros, opens the stats page', async () => {
+    m.api.getHealthHistory.mockResolvedValue(history({ token: true }))
+    await mount(<HealthHomeCard />)
+    expect(text()).toContain('Waiting for the first sync')
+    expect(text()).not.toMatch(/kcal|\b0\b/)
+    await click(host.querySelector('.card'))
+    expect(where).toBe('/nutrition/apple-health')
+  })
+
+  it('partial data (only today’s steps): shows steps, not a made-up burned figure', async () => {
+    m.api.getHealthHistory.mockResolvedValue(history({ token: true, hasData: true, updatedAt: Date.now() }, (i, d) => { if (i === 29) d.steps = 3210 }))
+    await mount(<HealthHomeCard />)
+    expect(text()).toContain('No numbers for today yet'.replace('No numbers for today yet', 'No numbers for today yet'))
+    expect(text()).toMatch(/3,?210 steps/)
+    expect(text()).not.toMatch(/\b0 kcal/)
+  })
+
+  it('data from earlier days but nothing today: says so rather than showing today as zero', async () => {
+    m.api.getHealthHistory.mockResolvedValue(history({ token: true, hasData: true, updatedAt: 1 }, (i, d) => { if (i === 25) Object.assign(d, { burned_kcal: 2000, active_kcal: 400, resting_kcal: 1600 }) }))
+    await mount(<HealthHomeCard />)
+    expect(text()).toContain('No numbers for today yet')
+    expect(text()).not.toMatch(/\b0 kcal/)
+  })
+
+  it('quiet on server errors and when nutrition is off (renders nothing at all)', async () => {
+    m.api.getHealthHistory.mockRejectedValue(new Error('network'))
+    await mount(<HealthHomeCard />)
+    expect(host.querySelector('.card')).toBeNull()
+    act(() => root.unmount()); root = createRoot(host)
+    m.api.getHealthHistory.mockRejectedValue(Object.assign(new Error('off'), { status: 503, data: { code: 'off' } }))
+    await mount(<HealthHomeCard />)
+    expect(host.querySelector('.card')).toBeNull()
+    expect(text()).toBe('')
+  })
+
+  it('Home shows it only for a signed-in profile, directly under the Nutrition card', async () => {
+    const { readFileSync } = await import('node:fs')
+    const src = readFileSync(process.cwd() + '/src/views/Home.jsx', 'utf8')
+    expect(src).toMatch(/\{user && <NutritionHomeCard \/>\}\s*\n\s*\{user && <HealthHomeCard \/>\}/)
+  })
+
+  it('a guest cannot open the stats page (sent home)', async () => {
+    m.user = null
+    await mount(<Routes><Route path="/nutrition/*" element={<Nutrition />} /><Route path="/home" element={<div>home</div>} /></Routes>, '/nutrition/apple-health')
+    expect(where).toBe('/home')
+    expect(m.api.getHealthHistory).not.toHaveBeenCalled()
+  })
+})
+
+describe('Apple Health stats page', () => {
+  const page = () => mount(<Routes><Route path="/nutrition/apple-health" element={<AppleHealth />} /><Route path="/nutrition/health" element={<div>setup</div>} /></Routes>, '/nutrition/apple-health')
+
+  it('full data: today in detail, both charts, the weight trend, recent workouts and the last sync', async () => {
+    m.api.getHealthHistory.mockResolvedValue(fullHistory())
+    await page()
+    expect(m.api.getHealthHistory).toHaveBeenCalledWith(today, 30)
+    const t = text()
+    for (const w of ['Last sync', 'Today', 'Burned', 'Active', 'Resting', 'Steps', 'Exercise', 'Calories burned', 'Recent workouts']) expect(t, w).toContain(w)
+    expect(t).toMatch(/2,?100/); expect(t).toMatch(/5,?400/); expect(t).toMatch(/450/); expect(t).toMatch(/1,?650/)
+    expect(t).toContain('Yoga, 30 min')                                  // today's workout, no calories part (none sent)
+    expect(t).toContain('Strength Training, 45 min, 320 kcal')
+    expect(t).toContain('Running, 30 min, 250 kcal, 5.2 km')
+    expect(t).toContain('80 kg'); expect(t).toMatch(/−2 kg in 30 days/)
+    expect(host.querySelectorAll('.nut-bars').length).toBe(2)
+    expect(host.querySelectorAll('.nut-bars')[0].querySelectorAll('.nut-bar-col').length).toBe(7)       // 7 days by default
+    expect(t).toContain('already inside Active')
+  })
+
+  it('7 and 30 days: the chart range changes, the average counts only days with data, and a tap shows the day', async () => {
+    m.api.getHealthHistory.mockResolvedValue(fullHistory())
+    await page()
+    await click(byText('button', '30 days'))
+    const bars = host.querySelectorAll('.nut-bars')[0]
+    expect(bars.querySelectorAll('.nut-bar-col').length).toBe(30)
+    expect(bars.querySelectorAll('.nut-bar-col.gap').length).toBe(20)                                    // 20 days with no data are gaps, not zero bars
+    expect(text()).toContain('days with data')
+    await click(bars.querySelectorAll('.nut-bar-col')[29])
+    expect(host.querySelector('.nut-chart-read').textContent).toMatch(/2,?100 kcal/)
+    await click(bars.querySelectorAll('.nut-bar-col')[0])
+    expect(host.querySelector('.nut-chart-read').textContent).toContain('no data')
+  })
+
+  it('weight follows the kg/lb setting', async () => {
+    m.unit = 'lb'
+    m.api.getHealthHistory.mockResolvedValue(fullHistory())
+    await page()
+    expect(text()).toContain('176.4 lb')
+    expect(text()).toMatch(/−4\.4 lb in 30 days/)
+  })
+
+  it('nothing set up: no stats, no zeros; a button to the setup screen', async () => {
+    m.api.getHealthHistory.mockResolvedValue(history())
+    await page()
+    const t = text()
+    expect(t).toContain('Nothing received yet')
+    expect(t).toContain('Set up Apple Health first')
+    expect(t).not.toContain('Calories burned')
+    expect(t).not.toMatch(/\b0\b/)
+    await click(byText('button', 'Token, address & guide'))
+    expect(where).toBe('/nutrition/health')
+  })
+
+  it('token made but nothing received: says the token is ready', async () => {
+    m.api.getHealthHistory.mockResolvedValue(history({ token: true }))
+    await page()
+    expect(text()).toContain('Your token is ready')
+  })
+
+  it('partial data: missing figures are dashes, empty charts say so, nothing is shown as 0', async () => {
+    m.api.getHealthHistory.mockResolvedValue(history({ token: true, hasData: true, updatedAt: Date.now() }, (i, d) => { if (i === 29) Object.assign(d, { steps: 1234 }) }))
+    await page()
+    const t = text()
+    expect(t).toContain('No energy numbers for today yet')
+    expect(t).toContain('1,234'.replace(',', (1000).toLocaleString().charAt(1) || ','))
+    expect(t).toContain('No data in this range yet')                      // burned chart is empty
+    expect(host.querySelectorAll('.nut-tile b')[0].textContent).toBe('–')
+    expect(t).toContain('No weight yet')
+    expect(t).toContain('No workouts in the last 30 days')
+    expect(t).not.toMatch(/(^|[^\d.,])0 kcal/)
+  })
+
+  it('a failed load shows the error and a retry; it never shows an empty "all zero" page', async () => {
+    m.api.getHealthHistory.mockRejectedValueOnce(new Error('HTTP 500')).mockResolvedValue(fullHistory())
+    await page()
+    expect(text()).toContain('Could not load Apple Health')
+    expect(text()).toContain('HTTP 500')
+    await click(byText('button', 'Try again'))
+    expect(text()).toContain('Recent workouts')
   })
 })

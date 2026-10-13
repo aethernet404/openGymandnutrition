@@ -327,6 +327,17 @@ export function nutritionRoutes({
       json(res, 200, { ok: true, days: stored.days, activity: stored.activity, weights: stored.weights, skipped, ignored_metrics: parsed.ignoredMetrics, warnings });
     },
 
+    // Everything the Apple Health stats page and the Home card show, for the signed-in profile only. Query:
+    // date (the viewer's local day, default today UTC) and days (1–60, default 30).
+    'GET /api/nutrition/health/history': guarded(async (req, res, user) => {
+      const q = query(req);
+      const d = q.get('date');
+      const to = /^\d{4}-\d{2}-\d{2}$/.test(d || '') && v.validDate(d) ? d : new Date().toISOString().slice(0, 10);
+      const n = q.get('days') == null ? 30 : Number(q.get('days'));
+      if (!Number.isInteger(n) || n < 1 || n > 60) return fail(res, 400, 'days must be a whole number from 1 to 60');
+      json(res, 200, store.healthHistory(store.read(user.id), to, n));
+    }),
+
     // Latest body weight (kg, always) and the last 30 days of readings, for the diary's small trend.
     'GET /api/nutrition/weight': guarded(async (req, res, user) => {
       const d = query(req).get('date');

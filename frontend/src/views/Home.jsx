@@ -16,6 +16,7 @@ import { tappable } from '../lib/use-sheet-keyboard.js'
 import { glyphOf } from '../lib/glyphs.js'
 import { dayNoteOf } from '../lib/day-notes.js'
 import NutritionHomeCard from '../nutrition/HomeCard.jsx'
+import HealthHomeCard from '../nutrition/HealthHomeCard.jsx'
 
 // Home = what to do now + a quick glance. Deep charts & history live in Stats.
 export default function Home() {
@@ -177,6 +178,7 @@ export default function Home() {
     )}
 
     {user && <NutritionHomeCard />}
+    {user && <HealthHomeCard />}
 
     {!S.routines.length && !S.active && (
       <div className="card">

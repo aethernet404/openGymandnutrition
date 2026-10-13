@@ -39,6 +39,13 @@ describe('nutrition layout survives narrow screens and large text', () => {
     expect(rule('.nut-datefield')).toMatch(/flex-wrap:wrap/)
     expect(rule('.nut-usda-row')).toMatch(/flex-wrap:wrap/)
   })
+  it('the Apple Health tiles and chart bars shrink to fit, so nothing is cut off at 375 px', () => {
+    expect(rule('.nut-tile')).toMatch(/min-width:0/)
+    expect(rule('.nut-bar-col')).toMatch(/min-width:0/)
+    expect(rule('.nut-bar-col')).toMatch(/flex:1 1 0/)
+    expect(rule('.nut-chart .row')).toMatch(/flex-wrap:wrap/)
+    expect(rule('.nut-ah-sync .row')).toMatch(/flex-wrap:wrap/)
+  })
   it('long names and messages wrap instead of widening the page', () => {
     expect(rule('.nut')).toMatch(/min-width:0/)
     expect(css).toMatch(/\.nut-banner[^{]*\{[^}]*overflow-wrap:anywhere/)

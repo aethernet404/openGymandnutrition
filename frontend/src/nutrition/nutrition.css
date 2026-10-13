@@ -158,3 +158,19 @@
 .nut-banner,.nut-preview,.nut-picked,.nut-note{min-width:0;overflow-wrap:anywhere}
 .nut-weight .row,.nut-activity .row{gap:12px}
 .nut-workouts li{overflow-wrap:anywhere}
+
+/* Apple Health stats page and Home card */
+.nut-hcard-sub{margin-top:6px;overflow-wrap:anywhere}
+.nut-tiles{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:0 0 10px}
+.nut-tile{display:flex;flex-direction:column;gap:2px;min-width:0;padding:10px 12px;border-radius:12px;background:var(--surface-2);overflow-wrap:anywhere}
+.nut-tile b{font-size:19px;font-weight:600;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.nut-rangebar{margin:4px 0 12px}
+.nut-chart .row{gap:8px;flex-wrap:wrap}
+.nut-bars{display:flex;align-items:flex-end;gap:2px;height:110px;margin:10px 0 6px;border-bottom:.5px solid var(--surface-3)}
+.nut-bar-col{flex:1 1 0;min-width:0;height:100%;display:flex;align-items:flex-end;padding:0;background:transparent;border:0;cursor:pointer}
+.nut-bar-col i{display:block;width:100%;border-radius:3px 3px 0 0;opacity:.85;min-height:0}
+.nut-bar-col.gap::after{content:"";display:block;width:100%;height:2px;background:var(--surface-3)}
+.nut-bar-col.on i{opacity:1;outline:2px solid var(--label-3);outline-offset:1px}
+.nut-chart-read{min-height:1.4em;margin-top:6px;color:var(--label-2);overflow-wrap:anywhere}
+.nut-ah-sync{margin-bottom:12px}
+.nut-ah-sync .row{flex-wrap:wrap}

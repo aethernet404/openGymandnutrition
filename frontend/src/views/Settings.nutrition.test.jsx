@@ -77,9 +77,22 @@ describe('Settings → Nutrition row', () => {
     expect(mocks.navs.at(-1)).toEqual(['/settings/workout'])
   })
 
+  it('the Apple Health row sits right after Nutrition and opens the setup screen (token, address, guide)', async () => {
+    act(() => root.render(<Settings />))
+    const rows = [...host.querySelectorAll('.lrow')].map(r => r.querySelector('.lrow-t')?.textContent)
+    expect(rows.indexOf('Apple Health')).toBe(rows.indexOf('Nutrition') + 1)
+    const r = row('Apple Health')
+    expect(r.tagName).toBe('BUTTON')
+    await tap(r)
+    expect(mocks.errors).toEqual([])
+    expect(mocks.navs).toEqual([['/nutrition/health']])
+    expect(mocks.navs[0][0].startsWith('/')).toBe(true)
+  })
+
   it('a guest has no Nutrition row (guests never reach the server)', () => {
     mocks.user = null
     act(() => root.render(<Settings />))
     expect(row('Nutrition')).toBeUndefined()
+    expect(row('Apple Health')).toBeUndefined()
   })
 })
