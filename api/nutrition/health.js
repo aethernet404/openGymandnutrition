@@ -26,7 +26,7 @@ import { dataDir } from './config.js';
 import { mutate, read, withLock, NutritionDataError } from './store.js';
 import { round } from './validate.js';
 
-export const LIMITS = { active: 10000, resting: 6000, total: 15000, steps: 200000, historyPerDay: 5, days: 400, pastDays: 60 };
+export const LIMITS = { active: 10000, resting: 6000, total: 15000, steps: 200000, historyPerDay: 5, days: 400, pastDays: 60, exerciseMin: 1440, workoutsPerDay: 20, workoutMin: 1440, workoutKcal: 10000, workoutKm: 1000, weightKg: [20, 500], weightsPerYear: 366 };
 const TOKEN_RE = /^ogh_([0-9a-f]{16})_([0-9a-f]{64})$/;
 const INDEX_LOCK = '__health_index__';
 
@@ -77,6 +77,53 @@ export function validateIngest(body, today = new Date().toISOString().slice(0, 1
     steps = st;
   }
   return { ok: true, value: { date, active_kcal: round(a.v, 1), resting_kcal: round(r.v, 1), steps } };
+}
+
+const realDay = date => typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date) && new Date(date + 'T00:00:00Z').toISOString().slice(0, 10) === date;
+function dateProblem(date, today) {
+  if (!realDay(date)) return 'date must be a real day written YYYY-MM-DD';
+  if (date > dayShift(today, 1)) return 'date is in the future';
+  if (date < dayShift(today, -LIMITS.pastDays)) return `date is more than ${LIMITS.pastDays} days ago`;
+  return null;
+}
+const inRange = (v, lo, hi) => typeof v === 'number' && Number.isFinite(v) && v >= lo && v <= hi;
+
+/**
+ * A day's exercise minutes and workouts (Health Auto Export). Display-only data: nothing here ever
+ * feeds Burned or Net. Strict: numbers must be numbers within bounds; a bad workout is dropped, not
+ * a reason to refuse the others.
+ * @returns {{ok:true, value:{date, exercise_min:number|null, workouts:object[]|null}, dropped:number} | {ok:false, error:string}}
+ */
+export function validateActivity(a, today = new Date().toISOString().slice(0, 10)) {
+  if (!a || typeof a !== 'object') return { ok: false, error: 'send a JSON object' };
+  const p = dateProblem(a.date, today); if (p) return { ok: false, error: p };
+  let exercise_min = null;
+  if (a.exercise_min != null) {
+    if (!inRange(a.exercise_min, 0, LIMITS.exerciseMin)) return { ok: false, error: `exercise_min is not plausible (0 to ${LIMITS.exerciseMin})` };
+    exercise_min = Math.round(a.exercise_min);
+  }
+  let workouts = null, dropped = 0;
+  if (a.workouts != null) {
+    if (!Array.isArray(a.workouts)) return { ok: false, error: 'workouts must be a list' };
+    workouts = [];
+    for (const w of a.workouts.slice(0, LIMITS.workoutsPerDay)) {
+      const ok = w && typeof w === 'object' && typeof w.name === 'string' && w.name.trim() && /^\d{2}:\d{2}$/.test(w.time || '')
+        && inRange(w.duration_min, 1, LIMITS.workoutMin) && (w.kcal == null || inRange(w.kcal, 0, LIMITS.workoutKcal)) && (w.km == null || inRange(w.km, 0, LIMITS.workoutKm));
+      if (!ok) { dropped++; continue; }
+      workouts.push({ name: w.name.trim().slice(0, 60), time: w.time, duration_min: Math.round(w.duration_min), kcal: w.kcal == null ? null : Math.round(w.kcal), km: w.km == null ? null : round(w.km, 2) });
+    }
+    dropped += Math.max(0, a.workouts.length - LIMITS.workoutsPerDay);
+  }
+  if (exercise_min == null && workouts == null) return { ok: false, error: 'no exercise minutes or workouts' };
+  return { ok: true, value: { date: a.date, exercise_min, workouts }, dropped };
+}
+
+/** One dated body-weight reading, in kilograms. */
+export function validateWeight(w, today = new Date().toISOString().slice(0, 10)) {
+  if (!w || typeof w !== 'object') return { ok: false, error: 'send a JSON object' };
+  const p = dateProblem(w.date, today); if (p) return { ok: false, error: p };
+  if (!inRange(w.kg, LIMITS.weightKg[0], LIMITS.weightKg[1])) return { ok: false, error: `weight is not plausible (${LIMITS.weightKg[0]} to ${LIMITS.weightKg[1]} kg)` };
+  return { ok: true, value: { date: w.date, kg: round(w.kg, 2) } };
 }
 
 /* ------------------------------ the token index ------------------------------ */
@@ -154,28 +201,108 @@ export function forget(id) {
 
 /* ------------------------------ writing the numbers ------------------------------ */
 
+/** Put one day's numbers in the profile's record, keeping the value it replaces in a short history. */
+function applyDay(h, v, now) {
+  h.days ||= {};
+  const prev = h.days[v.date];
+  const day = { active: v.active_kcal, resting: v.resting_kcal, steps: v.steps, updatedAt: now, history: prev ? [...(prev.history || [])] : [] };
+  if (prev && (prev.active !== v.active_kcal || prev.resting !== v.resting_kcal || prev.steps !== v.steps)) {
+    day.history.push({ at: prev.updatedAt, active: prev.active, resting: prev.resting, steps: prev.steps ?? null });
+  }
+  day.history = day.history.slice(-LIMITS.historyPerDay);
+  h.days[v.date] = day;
+  // A bounded file: the oldest days go first.
+  const keys = Object.keys(h.days).sort();
+  for (const k of keys.slice(0, Math.max(0, keys.length - LIMITS.days))) delete h.days[k];
+  return { date: v.date, active_kcal: day.active, resting_kcal: day.resting, steps: day.steps, burned_kcal: round(day.active + day.resting, 1), replaced: !!prev, updatedAt: now };
+}
+
 /**
- * Store a day's numbers. The same date again REPLACES the earlier values (the Shortcut always sends
- * the whole day so far); the value it replaced is kept in a short history. Returns what is stored.
+ * Store a day's numbers (the Shortcut). The same date again REPLACES the earlier values (the Shortcut
+ * always sends the whole day so far); the value it replaced is kept in a short history.
  */
 export function record(uid, tokenId, v, now = Date.now()) {
   return mutate(uid, d => {
     const h = (d.health ||= { days: {}, token: null });
     // The token that authenticated must still be the profile's current one (a rotate raced it).
     if (!h.token || h.token.id !== tokenId) return null;
-    h.days ||= {};
-    const prev = h.days[v.date];
-    const day = { active: v.active_kcal, resting: v.resting_kcal, steps: v.steps, updatedAt: now, history: prev ? [...(prev.history || [])] : [] };
-    if (prev && (prev.active !== v.active_kcal || prev.resting !== v.resting_kcal || prev.steps !== v.steps)) {
-      day.history.push({ at: prev.updatedAt, active: prev.active, resting: prev.resting, steps: prev.steps ?? null });
-    }
-    day.history = day.history.slice(-LIMITS.historyPerDay);
-    h.days[v.date] = day;
-    // A bounded file: the oldest days go first.
-    const keys = Object.keys(h.days).sort();
-    for (const k of keys.slice(0, Math.max(0, keys.length - LIMITS.days))) delete h.days[k];
+    const out = applyDay(h, v, now);
     h.token.lastUsedAt = now;
-    return { date: v.date, active_kcal: day.active, resting_kcal: day.resting, steps: day.steps, burned_kcal: round(day.active + day.resting, 1), replaced: !!prev, updatedAt: now };
+    return out;
+  });
+}
+
+/**
+ * Store several days from one Health Auto Export payload. Each day is a replacement of that day's
+ * numbers — never an addition, so a payload sent twice cannot count twice — with one safeguard for
+ * the app's partial exports: a day whose data does not start at the beginning of the day (`covers`
+ * false: "since the last sync", say) is not allowed to LOWER numbers already stored, because a
+ * day's totals only grow; it is kept as it was and reported as `kept`.
+ * @param {{date:string, active_kcal:number, resting_kcal:number, steps:number|null, covers:boolean}[]} days
+ */
+export function recordMany(uid, tokenId, days, now = Date.now()) {
+  return mutate(uid, d => {
+    const h = (d.health ||= { days: {}, token: null });
+    if (!h.token || h.token.id !== tokenId) return null;
+    const out = days.map(v => {
+      const prev = h.days?.[v.date];
+      if (prev && !v.covers && (v.active_kcal < prev.active || v.resting_kcal < prev.resting || (v.steps != null && prev.steps != null && v.steps < prev.steps))) {
+        return { date: v.date, active_kcal: prev.active, resting_kcal: prev.resting, steps: prev.steps ?? null, burned_kcal: round(prev.active + prev.resting, 1), replaced: false, action: 'kept', updatedAt: prev.updatedAt };
+      }
+      const r = applyDay(h, v, now);
+      return { ...r, action: r.replaced ? 'replaced' : 'stored' };
+    });
+    h.token.lastUsedAt = now;
+    return out;
+  });
+}
+
+/**
+ * Everything one Health Auto Export payload carries, in one write: energy days (replace, with the
+ * partial-export guard of recordMany), exercise minutes and workouts per day (replace — the same day
+ * sent again REPLACES, never adds), and weight readings (one per date, replaced). Each part is
+ * independent. Workout calories live in `activity` and are never summed into `days`.
+ * @param {{energy?:object[], activity?:object[], weights?:object[]}} parts  validated values
+ */
+export function recordHae(uid, tokenId, parts, now = Date.now()) {
+  return mutate(uid, d => {
+    const h = (d.health ||= { days: {}, token: null });
+    if (!h.token || h.token.id !== tokenId) return null;
+    const out = { days: [], activity: [], weights: [] };
+    for (const v of parts.energy || []) {
+      const prev = h.days?.[v.date];
+      if (prev && !v.covers && (v.active_kcal < prev.active || v.resting_kcal < prev.resting || (v.steps != null && prev.steps != null && v.steps < prev.steps))) {
+        out.days.push({ date: v.date, active_kcal: prev.active, resting_kcal: prev.resting, steps: prev.steps ?? null, burned_kcal: round(prev.active + prev.resting, 1), replaced: false, action: 'kept', updatedAt: prev.updatedAt });
+        continue;
+      }
+      const r = applyDay(h, v, now);
+      out.days.push({ ...r, action: r.replaced ? 'replaced' : 'stored' });
+    }
+    h.activity ||= {};
+    for (const a of parts.activity || []) {
+      const prev = h.activity[a.date];
+      const next = { exerciseMin: prev?.exerciseMin ?? null, workouts: prev?.workouts ?? [], updatedAt: now };
+      let kept = false;
+      if (a.exercise_min != null) {
+        if (prev?.exerciseMin != null && a.exercise_min < prev.exerciseMin && a.exercise_covers === false) kept = true;   // a partial export can't lower a day's total
+        else next.exerciseMin = a.exercise_min;
+      }
+      if (a.workouts != null) next.workouts = a.workouts;
+      h.activity[a.date] = next;
+      out.activity.push({ date: a.date, exercise_min: next.exerciseMin, workouts: next.workouts.length, action: prev ? (kept ? 'kept' : 'replaced') : 'stored' });
+    }
+    const keys = Object.keys(h.activity).sort();
+    for (const k of keys.slice(0, Math.max(0, keys.length - LIMITS.days))) delete h.activity[k];
+    if ((parts.weights || []).length) {
+      const byDate = new Map((h.weights || []).map(w => [w.date, w]));
+      for (const w of parts.weights) {
+        out.weights.push({ date: w.date, kg: w.kg, action: byDate.has(w.date) ? 'replaced' : 'stored' });
+        byDate.set(w.date, { date: w.date, kg: w.kg, at: now });
+      }
+      h.weights = [...byDate.values()].sort((a, b) => (a.date < b.date ? -1 : 1)).slice(-LIMITS.weightsPerYear);
+    }
+    h.token.lastUsedAt = now;
+    return out;
   });
 }
 

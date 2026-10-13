@@ -11,7 +11,7 @@ import { copyText } from '../lib/clipboard.js'
 import { dateLocale } from '../lib/i18n.js'
 import { nt } from './i18n.js'
 import * as nutri from './api.js'
-import { GUIDE_URL, RELIABILITY, STEPS, bearerHeader, endpointUrl, exampleJson } from './health-guide.js'
+import { GUIDE_URL, HAE_GUIDE_URL, HAE_METRICS, HAE_PREMIUM, HAE_STEPS, RELIABILITY, STEPS, bearerHeader, endpointUrl, exampleJson, haeEndpointUrl } from './health-guide.js'
 import { updatedText } from './diary.js'
 import './nutrition.css'
 
@@ -39,6 +39,7 @@ export default function Health() {
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const url = endpointUrl()
+  const haeUrl = haeEndpointUrl()
 
   const load = () => nutri.getConfig().then(c => { setToken(c.health); setEat(c.health.eatBack); setError('') }).catch(e => setError(e.message))
   useEffect(() => { load() }, [])
@@ -69,7 +70,7 @@ export default function Health() {
   return <div className="narrow nut">
     <div className="hdr">
       <button className="iconbtn" onClick={() => nav('/nutrition/goals')} aria-label={nt('Goals')}><Icon name="chevronLeft" /></button>
-      <div style={{ flex: 1, marginInlineStart: 10 }}><h1>{nt('Apple Health')}</h1><div className="sub">{nt('Calories burned, from a Shortcut')}</div></div>
+      <div style={{ flex: 1, marginInlineStart: 10 }}><h1>{nt('Apple Health')}</h1><div className="sub">{nt('Calories, workouts and weight')}</div></div>
     </div>
     {error && <div className="nut-banner warn"><Icon name="warning" /><span>{error}</span></div>}
 
@@ -99,7 +100,17 @@ export default function Health() {
       </div>}
     </Section>
 
-    <Section title={nt('Set up the Shortcut')} footer={RELIABILITY}>
+    <Section title={nt('Set up Health Auto Export')} footer={nt(HAE_PREMIUM)}>
+      <div className="lrow nut-usda-help"><span className="small muted">{nt('The app posts to this address (Automations → REST API):')}</span></div>
+      <div className="lrow nut-usda-row"><code className="nut-code">{haeUrl}</code><Button size="sm" icon="copy" onClick={() => copy(haeUrl, nt('Address'))}>{nt('Copy')}</Button></div>
+      <div className="lrow nut-usda-help"><span className="small muted">{nt('Metrics to turn on: {0}.', HAE_METRICS.join(', '))}</span></div>
+      <ol className="nut-steps">{HAE_STEPS.map((s, i) => <li key={i}>{nt(s)}</li>)}</ol>
+      <div className="lrow nut-usda-help"><span className="small">
+        <a href={HAE_GUIDE_URL} target="_blank" rel="noopener noreferrer">{nt('Open the full Health Auto Export guide')}</a>
+      </span></div>
+    </Section>
+
+    <Section title={nt('Or: set up the Shortcut')} footer={RELIABILITY}>
       <div className="lrow nut-usda-help"><span className="small muted">{nt('Post to this address:')}</span></div>
       <div className="lrow nut-usda-row"><code className="nut-code">{url}</code><Button size="sm" icon="copy" onClick={() => copy(url, nt('Address'))}>{nt('Copy')}</Button></div>
       <div className="lrow nut-usda-help"><span className="small muted">{nt('with this JSON body (numbers, not text):')}</span></div>

@@ -11,6 +11,8 @@ import * as v from './validate.js';
 import * as coachCfg from '../coach/config.js';
 import { createLookup, cleanBarcode } from './lookup.js';
 import * as health from './health.js';
+import * as hae from './hae.js';
+import * as haeDebug from './hae-debug.js';
 import { createWindow, createBackoff } from '../rate-limit.js';
 import { createAnalyzer, availability, checkInput, FAILURES } from './analyze.js';
 
@@ -66,6 +68,22 @@ export function nutritionRoutes({
     const f = FAILURES[code] || FAILURES.provider;
     if (detail && code !== 'cap') console.error('nutrition: AI analysis failed:', code, String(detail).slice(0, 200));
     json(res, f.status, { error: f.text, code, ai: allowance(uid) });
+  };
+
+  /** Everything an Apple Health post must pass before its body is even read: Nutrition on, the address not
+   *  locked, a valid Bearer token of a live profile, and the per-token limit. Answers and returns null if not. */
+  const ingestGate = (req, res) => {
+    if (!cfg.load().enabled) { json(res, 503, { error: 'nutrition is switched off on this instance', code: 'off' }); return null; }
+    const addr = limitAddress(req);
+    const wait = badTokens.retryAfter(addr);
+    if (wait) { json(res, 429, { error: 'too many attempts, try again later', code: 'locked', retryAfter: wait }, { 'Retry-After': String(wait) }); return null; }
+    const auth = health.authenticate(req.headers?.authorization);
+    // A token for a profile that is gone or disabled is dead; its index entry goes with it.
+    if (auth && !userActive(auth.uid)) { health.forget(auth.id).catch(() => {}); badTokens.fail(addr); json(res, 401, { error: 'invalid token' }); return null; }
+    if (!auth) { badTokens.fail(addr); json(res, 401, { error: 'invalid token' }); return null; }
+    const slow = perToken.take(auth.id);
+    if (slow) { json(res, 429, { error: 'too many updates; wait a bit', code: 'rate', retryAfter: slow }, { 'Retry-After': String(slow) }); return null; }
+    return auth;
   };
 
   const dateOf = (res, s) => { const r = v.dateParam(s); if (!r.ok) { invalid(res, r); return null; } return r.value; };
@@ -252,16 +270,7 @@ export function nutritionRoutes({
     // THE ONLY ROUTE THAT TAKES THE APPLE HEALTH TOKEN. No session, no cookie: a Bearer token made in
     // the app's settings. It can write one day's numbers and read nothing.
     'POST /api/nutrition/health': async (req, res) => {
-      if (!cfg.load().enabled) return json(res, 503, { error: 'nutrition is switched off on this instance', code: 'off' });
-      const addr = limitAddress(req);
-      const wait = badTokens.retryAfter(addr);
-      if (wait) return json(res, 429, { error: 'too many attempts, try again later', code: 'locked', retryAfter: wait }, { 'Retry-After': String(wait) });
-      const auth = health.authenticate(req.headers?.authorization);
-      // A token for a profile that is gone or disabled is dead; its index entry goes with it.
-      if (auth && !userActive(auth.uid)) { await health.forget(auth.id).catch(() => {}); badTokens.fail(addr); return json(res, 401, { error: 'invalid token' }); }
-      if (!auth) { badTokens.fail(addr); return json(res, 401, { error: 'invalid token' }); }
-      const slow = perToken.take(auth.id);
-      if (slow) return json(res, 429, { error: 'too many updates; wait a bit', code: 'rate', retryAfter: slow }, { 'Retry-After': String(slow) });
+      const auth = ingestGate(req, res); if (!auth) return;
       const checked = health.validateIngest(await readBody(req));
       if (!checked.ok) return json(res, 400, { error: checked.error, ...(checked.field ? { field: checked.field } : {}) });
       let out;
@@ -269,6 +278,71 @@ export function nutritionRoutes({
       catch (e) { if (e instanceof store.NutritionDataError) return fail(res, 500, 'could not store the numbers'); throw e; }
       if (!out) return json(res, 401, { error: 'invalid token' });        // the token was replaced while this request ran
       json(res, 200, { ok: true, ...out });
+    },
+
+    // The same token, for the iPhone app Health Auto Export (Automations → REST API → JSON, Health
+    // Metrics, v2). Reads its payload (hae.js), checks each day with the very same validation and
+    // bounds as the route above, and replaces that day's numbers. Never adds to them.
+    'POST /api/nutrition/health/hae': async (req, res) => {
+      const auth = ingestGate(req, res); if (!auth) return;
+      const payload = await readBody(req);
+      const parsed = hae.parseHae(payload);
+      const debugOn = cfg.load().healthDebug;
+      if (!parsed.ok) {
+        if (debugOn) haeDebug.capture(payload, { ok: false, code: parsed.code, error: parsed.error });
+        return json(res, 400, { error: parsed.error, code: parsed.code });
+      }
+      const energy = [], skipped = [];
+      for (const day of parsed.days) {
+        const v = health.validateIngest({ date: day.date, active_kcal: day.active_kcal, resting_kcal: day.resting_kcal, steps: day.steps });
+        if (v.ok) energy.push({ ...v.value, covers: day.covers });
+        else skipped.push({ date: day.date, kind: 'energy', reason: v.error, ...(v.field ? { field: v.field } : {}) });
+      }
+      // Workouts, exercise minutes and weight are independent of the energy numbers: one failing never blocks another.
+      const activity = [], weights = [];
+      let dropped = 0;
+      for (const a of parsed.activity) {
+        const v = health.validateActivity(a);
+        if (v.ok) { activity.push({ ...v.value, exercise_covers: a.exercise_covers }); dropped += v.dropped; }
+        else skipped.push({ date: a.date, kind: 'activity', reason: v.error });
+      }
+      for (const w of parsed.weights) {
+        const v = health.validateWeight(w);
+        if (v.ok) weights.push(v.value);
+        else skipped.push({ date: w.date, kind: 'weight', reason: v.error });
+      }
+      const summary = { ok: energy.length + activity.length + weights.length > 0, days: parsed.days.map(d => ({ date: d.date, active_kcal: d.active_kcal, resting_kcal: d.resting_kcal, steps: d.steps, covers: d.covers })), activity: parsed.activity.map(a => ({ date: a.date, exercise_min: a.exercise_min, workouts: a.workouts ? a.workouts.length : null })), weights: parsed.weights, skipped, ignoredMetrics: parsed.ignoredMetrics, warnings: parsed.warnings, stats: parsed.stats };
+      if (debugOn) haeDebug.capture(payload, summary);
+      if (!energy.length && !activity.length && !weights.length) {
+        return json(res, 400, { error: `Nothing was stored. ${skipped[0].date}: ${skipped[0].reason}`, code: 'invalid', skipped });
+      }
+      let stored;
+      try { stored = await health.recordHae(auth.uid, auth.id, { energy, activity, weights }); }
+      catch (e) { if (e instanceof store.NutritionDataError) return fail(res, 500, 'could not store the numbers'); throw e; }
+      if (!stored) return json(res, 401, { error: 'invalid token' });
+      const warnings = [...parsed.warnings];
+      if (dropped) warnings.push(`${dropped} workout(s) were not plausible and were skipped.`);
+      for (const d of stored.days) if (d.action === 'kept') warnings.push(`${d.date}: this export starts partway through the day and would lower the numbers already stored, so they were kept. Set the automation's Date Range to Today.`);
+      json(res, 200, { ok: true, days: stored.days, activity: stored.activity, weights: stored.weights, skipped, ignored_metrics: parsed.ignoredMetrics, warnings });
+    },
+
+    // Latest body weight (kg, always) and the last 30 days of readings, for the diary's small trend.
+    'GET /api/nutrition/weight': guarded(async (req, res, user) => {
+      const d = query(req).get('date');
+      const today = /^\d{4}-\d{2}-\d{2}$/.test(d || '') ? d : new Date().toISOString().slice(0, 10);
+      json(res, 200, store.weightView(store.read(user.id), today));
+    }),
+
+    // Admin only: the shape of the last Health Auto Export payload, if the debug option is on.
+    'GET /api/admin/nutrition/health-debug': async (req, res) => {
+      if (!requireAdmin(req, res)) return;
+      const on = cfg.load().healthDebug;
+      json(res, 200, { enabled: on, capture: on ? haeDebug.read() : null, ttlMinutes: haeDebug.TTL_MS / 60000 });
+    },
+    'DELETE /api/admin/nutrition/health-debug': async (req, res) => {
+      if (!requireAdmin(req, res)) return;
+      haeDebug.clear();
+      json(res, 200, { ok: true });
     },
 
     'GET /api/nutrition/health/token': guarded(async (req, res, user) => { json(res, 200, health.tokenStatus(user.id)); }),
@@ -339,6 +413,7 @@ export function nutritionRoutes({
       if (!requireAdmin(req, res)) return;
       const r = cfg.save(await readBody(req));
       if (!r.ok) return fail(res, 400, r.error);
+      if (!r.config.healthDebug) haeDebug.clear();
       json(res, 200, { ...r.config, usdaKeyHint: cfg.usdaKeyHint(), aiCapMax: cfg.AI_CAP_MAX, aiCapDefault: cfg.AI_CAP_DEFAULT });
     },
 

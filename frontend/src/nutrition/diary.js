@@ -145,3 +145,39 @@ export function updatedText(ts, now = Date.now(), locale) {
   const time = t.toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' })
   return same ? time : t.toLocaleDateString(locale, { day: 'numeric', month: 'short' }) + ', ' + time
 }
+
+/* ---------- Health Auto Export extras: workouts, exercise minutes, body weight (display only) ---------- */
+
+const KG_PER_LB = 0.45359237
+const KM_PER_MI = 1.609344
+const dec1 = n => (Math.round(n * 10) / 10).toString()
+
+/** A kilogram figure in the profile's weight unit ('kg' or 'lb'), one decimal, as a number. */
+export const kgToUnit = (kg, unit) => Math.round((unit === 'lb' ? kg / KG_PER_LB : kg) * 10) / 10
+export const weightText = (kg, unit) => (Number.isFinite(kg) ? `${dec1(kgToUnit(kg, unit))} ${unit === 'lb' ? 'lb' : 'kg'}` : '')
+
+/**
+ * One workout as a line: "Strength Training, 45 min, 320 kcal" (+ ", 5.2 km" when there is a distance; miles
+ * when the profile counts in pounds). A workout without calories simply has no calories part. These calories
+ * are display only: they are already inside Active Energy and are never added to Burned or Net.
+ */
+export function workoutLine(w, unit = 'kg') {
+  const parts = [w.name, `${w.duration_min} min`]
+  if (Number.isFinite(w.kcal)) parts.push(`${Math.round(w.kcal)} kcal`)
+  if (Number.isFinite(w.km) && w.km > 0) parts.push(unit === 'lb' ? `${dec1(w.km / KM_PER_MI)} mi` : `${dec1(w.km)} km`)
+  return parts.join(', ')
+}
+
+/** Readings (kg, any order) → the points to draw, in the profile's unit, and the change over them. */
+export function weightTrend(readings, unit = 'kg') {
+  const pts = (readings || []).filter(r => r && Number.isFinite(r.kg)).sort((a, b) => (a.date < b.date ? -1 : 1)).map(r => ({ date: r.date, v: kgToUnit(r.kg, unit) }))
+  const change = pts.length >= 2 ? Math.round((pts.at(-1).v - pts[0].v) * 10) / 10 : null
+  return { points: pts, change }
+}
+
+/** An SVG path for a small line chart of `values` in a w × h box (null for fewer than two values). */
+export function sparkPath(values, w = 120, h = 32, pad = 3) {
+  if (!values || values.length < 2) return null
+  const lo = Math.min(...values), hi = Math.max(...values), span = hi - lo || 1
+  return values.map((v, i) => `${i ? 'L' : 'M'}${(pad + (w - 2 * pad) * i / (values.length - 1)).toFixed(1)} ${(h - pad - (h - 2 * pad) * (v - lo) / span).toFixed(1)}`).join(' ')
+}

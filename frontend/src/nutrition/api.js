@@ -38,3 +38,7 @@ export const getHealthToken = () => api('/api/nutrition/health/token')
 export const createHealthToken = () => send('POST', '/api/nutrition/health/token', {})
 export const revokeHealthToken = () => send('DELETE', '/api/nutrition/health/token')
 export const putHealthSettings = eatBack => send('PUT', '/api/nutrition/health/settings', { eatBack })
+export const getWeight = date => api('/api/nutrition/weight?' + q({ date }))
+// Admin only: the shape of the last Health Auto Export payload (the option is off by default).
+export const getHealthDebug = () => api('/api/admin/nutrition/health-debug')
+export const clearHealthDebug = () => send('DELETE', '/api/admin/nutrition/health-debug')

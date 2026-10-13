@@ -12,6 +12,7 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true
 
 const m = vi.hoisted(() => ({
   user: { id: 'u1', name: 'Me', admin: false },
+  unit: 'kg',
   sheets: [],
   downscale: vi.fn(),
   copy: vi.fn(async () => true),
@@ -21,12 +22,12 @@ const m = vi.hoisted(() => ({
   api: {
     getDay: vi.fn(), getConfig: vi.fn(), addEntries: vi.fn(), updateEntry: vi.fn(), deleteEntry: vi.fn(),
     listFoods: vi.fn(), createFood: vi.fn(), updateFood: vi.fn(), deleteFood: vi.fn(), getGoals: vi.fn(), putGoals: vi.fn(),
-    getAdmin: vi.fn(), putAdmin: vi.fn(), getRange: vi.fn(), searchFoods: vi.fn(), lookupBarcode: vi.fn(), testUsda: vi.fn(), analyze: vi.fn(), setCoachShare: vi.fn(), createHealthToken: vi.fn(), revokeHealthToken: vi.fn(), putHealthSettings: vi.fn(), getHealthToken: vi.fn()
+    getAdmin: vi.fn(), putAdmin: vi.fn(), getRange: vi.fn(), searchFoods: vi.fn(), lookupBarcode: vi.fn(), testUsda: vi.fn(), analyze: vi.fn(), setCoachShare: vi.fn(), createHealthToken: vi.fn(), revokeHealthToken: vi.fn(), putHealthSettings: vi.fn(), getHealthToken: vi.fn(), getWeight: vi.fn(), getHealthDebug: vi.fn(), clearHealthDebug: vi.fn()
   }
 }))
 
 vi.mock('../store/useStore.js', () => {
-  const snap = () => ({ user: m.user, S: {} })
+  const snap = () => ({ user: m.user, S: { unit: m.unit } })
   const useStore = sel => (sel ? sel(snap()) : snap())
   useStore.getState = snap
   return { useStore }
@@ -106,10 +107,12 @@ beforeEach(() => {
   m.sheets.length = 0
   shown = []
   m.user = { id: 'u1', name: 'Me', admin: false }
+  m.unit = 'kg'
   for (const f of Object.values(m.api)) f.mockReset()
   m.toast.mockReset(); m.confirm.mockReset(); m.downscale.mockReset(); m.decode.mockReset()
   globalThis.URL.revokeObjectURL = globalThis.URL.revokeObjectURL || (() => {})
   m.api.getDay.mockResolvedValue(dayOf())
+  m.api.getWeight.mockResolvedValue({ latest: null, readings: [], count: 0 })
   m.api.getConfig.mockResolvedValue({ ai: { limit: 30, used: 3, remaining: 27, available: true, reason: null } })
 })
 afterEach(() => { act(() => root.unmount()); host.remove() })
@@ -1004,7 +1007,7 @@ describe('Apple Health screen', () => {
     expect(link).toBeTruthy(); expect(link.target).toBe('_blank'); expect(link.rel).toContain('noopener')
     expect(text()).toMatch(/best effort/)
     expect(text()).toMatch(/locked/)
-    await click(byText('button', 'Copy'))
+    await click([...host.querySelectorAll('button')].filter(b => b.textContent === 'Copy')[1])      // the Shortcut section's address (the first is Health Auto Export's)
     expect(m.copy).toHaveBeenCalledWith(location.origin + '/api/nutrition/health')
   })
 
@@ -1131,5 +1134,108 @@ describe('Home card, router, goals, foods', () => {
     expect(m.api.updateFood).toHaveBeenCalledWith('f1', { favorite: true })
     await click(byText('button', 'Favourites'))
     expect(m.api.listFoods).toHaveBeenLastCalledWith('favorite', '')
+  })
+})
+
+describe('Health Auto Export in the app', () => {
+  const WORKOUTS = [
+    { name: 'Running', time: '07:05', duration_min: 30, kcal: 250, km: 5.2 },
+    { name: 'Traditional Strength Training', time: '18:30', duration_min: 45, kcal: 320, km: null }
+  ]
+
+  it('the diary lists the day’s workouts and exercise minutes, and does not add their calories to Burned or Net', async () => {
+    m.api.getDay.mockResolvedValue(dayOf({ health: HEALTH, activity: { exercise_min: 52, workouts: WORKOUTS, updatedAt: 1 } }))
+    await mount(<Diary />)
+    const t = text()
+    expect(t).toContain('Running, 30 min, 250 kcal, 5.2 km')
+    expect(t).toContain('Traditional Strength Training, 45 min, 320 kcal')
+    expect(t).toContain('52 exercise min')
+    expect(t).toContain('already inside Active')
+    expect(t).toMatch(/2,?310/)                                       // Burned is still 640 + 1,670
+    expect(t).not.toMatch(/2,?880/)                                   // 2,310 + 250 + 320 would be the double count
+    expect(t).toContain('−1,360'.replace(',', (1000).toLocaleString().charAt(1) || ','))   // Net unchanged
+  })
+
+  it('a day with workouts but no energy numbers shows the workouts and no Burned', async () => {
+    m.api.getDay.mockResolvedValue(dayOf({ health: null, activity: { exercise_min: null, workouts: [WORKOUTS[1]], updatedAt: 1 } }))
+    await mount(<Diary />)
+    expect(text()).toContain('Traditional Strength Training, 45 min, 320 kcal')
+    expect(text()).not.toContain('Burned')
+  })
+
+  it('no activity: no workouts card', async () => {
+    await mount(<Diary />)
+    expect(text()).not.toContain('exercise min')
+    expect(text()).not.toContain('Workouts')
+  })
+
+  it('weight: with no data, a hint that leads to the setup', async () => {
+    await mount(<Diary />)
+    expect(text()).toContain('No weight from Apple Health yet')
+    await click(byText('button', 'No weight from Apple Health yet'))
+    expect(where).toBe('/nutrition/health')
+  })
+
+  it('weight: the latest reading, in the profile’s unit, with a 30-day line and the change', async () => {
+    m.api.getWeight.mockResolvedValue({ latest: { date: '2026-10-12', kg: 80 }, readings: [{ date: '2026-09-20', kg: 82 }, { date: '2026-10-01', kg: 81 }, { date: '2026-10-12', kg: 80 }], count: 3 })
+    await mount(<Diary />)
+    expect(text()).toContain('80 kg')
+    expect(text()).toContain('−2 kg in 30 days')
+    expect(host.querySelector('svg[aria-label="Weight, last 30 days"] path').getAttribute('d')).toMatch(/^M/)
+    expect(m.api.getWeight).toHaveBeenCalledWith(today)
+    act(() => root.unmount()); root = createRoot(host); m.unit = 'lb'
+    await mount(<Diary />)
+    expect(text()).toContain('176.4 lb')
+    expect(text()).toMatch(/−4\.4 lb in 30 days/)
+  })
+
+  it('weight: one reading is a value without a line; a failing weight call hides the card and never breaks the diary', async () => {
+    m.api.getWeight.mockResolvedValue({ latest: { date: '2026-10-12', kg: 80 }, readings: [{ date: '2026-10-12', kg: 80 }], count: 1 })
+    await mount(<Diary />)
+    expect(text()).toContain('A line appears with two readings')
+    act(() => root.unmount()); root = createRoot(host)
+    m.api.getWeight.mockRejectedValue(new Error('HTTP 500'))
+    await mount(<Diary />)
+    expect(text()).toContain('Oats')
+    expect(text()).not.toContain('No weight from Apple Health')
+  })
+
+  it('the Health screen shows the exact Health Auto Export address, the metrics to turn on, and the premium note', async () => {
+    m.api.getConfig.mockResolvedValue({ ai: { limit: 30, used: 0, remaining: 30, available: true }, health: { set: true, createdAt: 1, lastUsedAt: null, hint: '…cdef', eatBack: { enabled: false, percent: 50 } } })
+    await mount(<Health />)
+    const t = text()
+    expect(t).toContain(location.origin + '/api/nutrition/health/hae')
+    for (const metric of ['Active Energy', 'Resting Energy', 'Steps', 'Workouts', 'Exercise Minutes', 'Weight']) expect(t, metric).toContain(metric)
+    expect(t).toContain('Automations → + → REST API')
+    expect(t).toContain('premium feature')
+    expect(t).toContain('$6.99')
+    expect(t).toContain('Manual Export')
+    await click([...host.querySelectorAll('button')].filter(b => b.textContent === 'Copy')[0])
+    expect(m.copy).toHaveBeenLastCalledWith(location.origin + '/api/nutrition/health/hae')
+    // The HAE section comes before the Shortcut one.
+    expect(t.indexOf('Set up Health Auto Export')).toBeLessThan(t.indexOf('Or: set up the Shortcut'))
+  })
+
+  it('the debug option is admin only, off by default, and shows the shape once there is one', async () => {
+    m.api.getGoals.mockResolvedValue({ goals: null })
+    m.api.getConfig.mockResolvedValue({ ai: {}, coach: { available: false } })
+    await mount(<Goals />)
+    expect(text()).not.toContain('Health Auto Export debug')
+    expect(m.api.getHealthDebug).not.toHaveBeenCalled()
+    act(() => root.unmount()); root = createRoot(host)
+    m.user = { id: 'u1', name: 'Me', admin: true }
+    m.api.getAdmin.mockResolvedValue({ enabled: true, aiDailyCap: 30, aiCapMax: 500, aiCapDefault: 30, usdaKeySet: false })
+    m.api.getHealthDebug.mockResolvedValue({ enabled: false, capture: null, ttlMinutes: 60 })
+    await mount(<Goals />)
+    expect(text()).toContain('Health Auto Export debug')
+    expect(host.querySelectorAll('[role="switch"]')).toBeTruthy()
+    const sw = [...host.querySelectorAll('[role="switch"]')].at(-1)
+    expect(sw.getAttribute('aria-checked')).toBe('false')
+    m.api.putAdmin.mockResolvedValue({})
+    m.api.getHealthDebug.mockResolvedValue({ enabled: true, capture: { at: Date.UTC(2026, 9, 13), shape: { metrics: [{ name: 'weight_body_mass', points: 1 }] }, outcome: { ok: true } }, ttlMinutes: 60 })
+    await click(sw)
+    expect(m.api.putAdmin).toHaveBeenCalledWith({ healthDebug: true })
+    expect(text()).toContain('weight_body_mass')
+    expect(text()).toContain('never the token')
   })
 })

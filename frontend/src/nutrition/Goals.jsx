@@ -32,6 +32,33 @@ function Admin() {
   </Section>
 }
 
+// Admin only, off by default: keeps the SHAPE of the last Health Auto Export payload for an hour so a
+// wrong guess about the app's format can be settled from what it really sends. Never any token.
+function HealthDebug() {
+  const [state, setState] = useState(null)       // { enabled, capture, ttlMinutes }
+  const [busy, setBusy] = useState(false)
+  const load = () => Promise.resolve(nutri.getHealthDebug()).then(r => r && setState(r)).catch(() => {})
+  useEffect(() => { load() }, [])
+  if (!state) return null
+  const toggle = async on => {
+    setBusy(true)
+    try { await nutri.putAdmin({ healthDebug: on }); await load(); toast(on ? nt('Debug on: the next export is captured') : nt('Debug off; the capture was wiped')) } catch (e) { toast(e.message) }
+    setBusy(false)
+  }
+  const shape = state.capture ? JSON.stringify({ received: new Date(state.capture.at).toISOString(), shape: state.capture.shape, parsedAs: state.capture.outcome }, null, 2) : ''
+  return <Section title={nt('Health Auto Export debug')} footer={nt('Off by default. When on, the shape of the last export (key names and one example item per metric, never the token) is kept in memory for {0} minutes, then forgotten. Use it to see what the app really sends.', state.ttlMinutes)}>
+    <Row icon="bug" iconTint="var(--orange)" title={nt('Keep the last payload’s shape')}>
+      <Switch checked={state.enabled} onChange={toggle} disabled={busy} />
+    </Row>
+    {state.enabled && <div className="lrow nut-usda-row">
+      <Button size="sm" onClick={load}>{nt('Refresh')}</Button>
+      {state.capture && <Button size="sm" variant="ghost" style={{ color: 'var(--red)' }} onClick={async () => { await nutri.clearHealthDebug().catch(() => {}); load() }}>{nt('Clear')}</Button>}
+    </div>}
+    {state.enabled && !state.capture && <div className="lrow nut-usda-help"><span className="small muted">{nt('Nothing captured yet. Tap Manual Export in the app, then Refresh.')}</span></div>}
+    {state.capture && <div className="lrow nut-usda-row"><pre className="nut-code block" style={{ maxHeight: 320, overflow: 'auto' }}>{shape}</pre></div>}
+  </Section>
+}
+
 // The one setting that needs a visit to another website. Everything about getting the key is on
 // this card, because the person who needs it is standing here with a search that says "USDA is off".
 function UsdaKey() {
@@ -124,9 +151,10 @@ export default function Goals() {
       <div style={{ height: 14 }} />
       <Button variant="primary" onClick={save} disabled={busy}>{nt('Save goals')}</Button>
     </div>}
-    {g && <Section><Row icon="heart" iconTint="var(--red)" title={nt('Apple Health')} subtitle={nt('Calories burned, from an iOS Shortcut')} accessory="chevron" onClick={() => nav('/nutrition/health')} /></Section>}
+    {g && <Section><Row icon="heart" iconTint="var(--red)" title={nt('Apple Health')} subtitle={nt('Calories, workouts and weight, from Health Auto Export or a Shortcut')} accessory="chevron" onClick={() => nav('/nutrition/health')} /></Section>}
     {g && <CoachShare />}
     {user?.admin && <Admin />}
     {user?.admin && <UsdaKey />}
+    {user?.admin && <HealthDebug />}
   </div>
 }

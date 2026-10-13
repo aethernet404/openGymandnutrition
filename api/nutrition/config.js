@@ -24,7 +24,7 @@ function readStored() {
 export function load() {
   const stored = readStored();
   const cap = Number.isInteger(stored.aiDailyCap) && stored.aiDailyCap >= 0 && stored.aiDailyCap <= AI_CAP_MAX ? stored.aiDailyCap : DEFAULTS.aiDailyCap;
-  return { enabled: stored.enabled !== false, aiDailyCap: cap, usdaKeySet: !!usdaKey() };
+  return { enabled: stored.enabled !== false, aiDailyCap: cap, usdaKeySet: !!usdaKey(), healthDebug: stored.healthDebug === true };
 }
 
 /** The decrypted USDA FoodData Central key, or null. Server-side use only. */
@@ -45,10 +45,14 @@ export function usdaKeyHint() {
 export function save(patch) {
   if (patch == null || typeof patch !== 'object' || Array.isArray(patch)) return { ok: false, error: 'send the settings as an object' };
   const stored = readStored();
-  const next = { enabled: load().enabled, aiDailyCap: load().aiDailyCap, ...(stored.usdaKey ? { usdaKey: stored.usdaKey } : {}) };
+  const next = { enabled: load().enabled, aiDailyCap: load().aiDailyCap, ...(stored.healthDebug === true ? { healthDebug: true } : {}), ...(stored.usdaKey ? { usdaKey: stored.usdaKey } : {}) };
   if (patch.enabled !== undefined) {
     if (typeof patch.enabled !== 'boolean') return { ok: false, error: 'enabled must be true or false' };
     next.enabled = patch.enabled;
+  }
+  if (patch.healthDebug !== undefined) {
+    if (typeof patch.healthDebug !== 'boolean') return { ok: false, error: 'healthDebug must be true or false' };
+    if (patch.healthDebug) next.healthDebug = true; else delete next.healthDebug;
   }
   if (patch.aiDailyCap !== undefined) {
     if (!Number.isInteger(patch.aiDailyCap) || patch.aiDailyCap < 0 || patch.aiDailyCap > AI_CAP_MAX) {

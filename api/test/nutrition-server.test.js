@@ -307,3 +307,57 @@ test('Apple Health: revoking, rotating, and deleting the profile each kill the t
   assert.equal(await send(t4), 401, 'a deleted profile’s token is dead');
   assert.ok(!fs.existsSync(path.join(h.dataDir, 'nutrition', `${USER}.json`)), 'and the ingest did not bring its file back');
 });
+
+test('Health Auto Export through the real server: Bearer only, workouts + weight, token nowhere else, admin debug is admin-only', async t => {
+  const h = await boot(t, { INVITE_ONLY: '1', ALLOW_GUEST: '0' });
+  const day = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+  const token = (await h.call('POST', '/api/nutrition/health/token', USER)).body.token;
+  const at = tm => `${day} ${tm} +0000`;
+  const payload = {
+    data: {
+      metrics: [
+        { name: 'active_energy', units: 'kcal', data: [{ date: at('00:00:00'), qty: 520, source: '' }] },
+        { name: 'basal_energy_burned', units: 'kcal', data: [{ date: at('00:00:00'), qty: 1650, source: '' }] },
+        { name: 'step_count', units: 'count', data: [{ date: at('00:00:00'), qty: 8100, source: '' }] },
+        { name: 'apple_exercise_time', units: 'min', data: [{ date: at('00:00:00'), qty: 41 }] },
+        { name: 'weight_body_mass', units: 'kg', data: [{ date: at('07:00:00'), qty: 79.4 }] },
+        { name: 'apple_stand_hour', units: 'hr', data: [{ date: at('00:00:00'), qty: 9 }] }
+      ],
+      workouts: [{ id: 'w1', name: 'Traditional Strength Training', start: at('18:30:00'), end: at('19:15:00'), duration: 2700, activeEnergyBurned: { qty: 320, units: 'kcal' } }]
+    }
+  };
+  const post = (body, bearer = token, headers = {}) => fetch(h.api + '/api/nutrition/health/hae', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + bearer, 'User-Agent': 'HealthAutoExport/10.0.4', ...headers }, body: JSON.stringify(body)
+  }).then(async r => ({ status: r.status, body: await r.json().catch(() => null) }));
+
+  const ok = await post(payload);
+  assert.equal(ok.status, 200, h.log);
+  assert.deepEqual(ok.body.days.map(d => [d.active_kcal, d.burned_kcal, d.action]), [[520, 2170, 'stored']]);
+  assert.deepEqual(ok.body.ignored_metrics, ['apple_stand_hour']);
+  assert.equal((await post(payload)).body.days[0].action, 'replaced');
+
+  const view = await h.call('GET', `/api/nutrition/day?date=${day}`, USER);
+  assert.equal(view.body.health.burned_kcal, 2170);
+  assert.equal(view.body.activity.workouts[0].kcal, 320);
+  assert.equal(view.body.activity.exercise_min, 41);
+  assert.equal((await h.call('GET', `/api/nutrition/weight?date=${day}`, USER)).body.latest.kg, 79.4);
+  assert.equal((await h.call('GET', `/api/nutrition/day?date=${day}`, OTHER)).body.activity, null);
+
+  assert.equal((await post({ nope: 1 })).status, 400);
+  assert.equal((await post(payload, 'ogh_' + 'a'.repeat(16) + '_' + 'b'.repeat(64))).status, 401);
+  for (const [method, p] of [['GET', '/api/nutrition/weight'], ['GET', '/api/admin/nutrition/health-debug'], ['DELETE', '/api/admin/nutrition/health-debug']]) {
+    const r = await fetch(h.api + p, { method, headers: { Authorization: 'Bearer ' + token } });
+    assert.equal(r.status, 401, `${method} ${p}`);
+  }
+
+  // Debug: off by default, admin only, shape kept once on.
+  assert.equal((await h.call('GET', '/api/admin/nutrition/health-debug', USER)).status, 403);
+  assert.deepEqual((await h.call('GET', '/api/admin/nutrition/health-debug', ADMIN)).body, { enabled: false, capture: null, ttlMinutes: 60 });
+  assert.equal((await h.call('PUT', '/api/admin/nutrition', ADMIN, { healthDebug: true })).status, 200);
+  await post(payload);
+  const cap = (await h.call('GET', '/api/admin/nutrition/health-debug', ADMIN)).body;
+  assert.equal(cap.enabled, true);
+  assert.ok(cap.capture.shape.metrics.some(m => m.name === 'weight_body_mass'));
+  assert.ok(!JSON.stringify(cap).includes(token.split('_')[2]));
+  assert.ok(!h.log.includes(token.split('_')[2]), 'the token is never logged');
+});

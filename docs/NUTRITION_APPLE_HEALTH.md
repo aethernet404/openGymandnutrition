@@ -8,6 +8,9 @@ server.
 On the diary you then see **Eaten**, **Burned** (active + resting) and **Net** (eaten − burned) for
 the day, with the time they last arrived.
 
+> Don't want to build a Shortcut? The iPhone app Health Auto Export can send the same numbers (plus
+> workouts and weight) with no building: see [NUTRITION_HEALTH_AUTO_EXPORT.md](NUTRITION_HEALTH_AUTO_EXPORT.md).
+
 ## 1. Make a token
 
 openGym → **Nutrition → Goals → Apple Health → Make a token**.

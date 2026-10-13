@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   shiftISO, validISO, relativeDay, mealForHour, fraction, remaining, macroSplit, kcalFromMacros,
-  scaleFood, parseAmount, quickBody, foodBody, goalsBody, macroLine
+  scaleFood, parseAmount, quickBody, foodBody, goalsBody, macroLine, kgToUnit, weightText, workoutLine, weightTrend, sparkPath
 } from './diary.js'
 
 describe('dates', () => {
@@ -139,5 +139,42 @@ describe('Apple Health numbers', () => {
     expect(updatedText(new Date(2026, 9, 12, 23, 30).getTime(), now, 'en-GB')).toBe('12 Oct, 23:30')
     expect(updatedText(NaN, now)).toBe('')
     expect(updatedText(undefined, now)).toBe('')
+  })
+})
+
+describe('Health Auto Export extras', () => {
+  it('weights are shown in the profile’s unit, one decimal', () => {
+    expect(kgToUnit(80, 'kg')).toBe(80)
+    expect(kgToUnit(80, 'lb')).toBe(176.4)
+    expect(weightText(79.8, 'kg')).toBe('79.8 kg')
+    expect(weightText(80, 'lb')).toBe('176.4 lb')
+    expect(weightText(NaN, 'kg')).toBe('')
+  })
+  it('a workout reads as name, minutes, calories (and distance when there is one)', () => {
+    expect(workoutLine({ name: 'Strength Training', duration_min: 45, kcal: 320, km: null })).toBe('Strength Training, 45 min, 320 kcal')
+    expect(workoutLine({ name: 'Running', duration_min: 30, kcal: 250, km: 5.2 })).toBe('Running, 30 min, 250 kcal, 5.2 km')
+    expect(workoutLine({ name: 'Running', duration_min: 30, kcal: 250, km: 5 }, 'lb')).toBe('Running, 30 min, 250 kcal, 3.1 mi')
+    expect(workoutLine({ name: 'Yoga', duration_min: 20, kcal: null, km: null })).toBe('Yoga, 20 min')
+  })
+  it('workout calories do not feed Burned: burnedOf only knows active + resting', () => {
+    expect(burnedOf({ active_kcal: 600, resting_kcal: 1700, workouts: [{ kcal: 900 }] })).toBe(2300)
+  })
+  it('the trend is in order, in the unit, with the change; one reading has no change', () => {
+    const t = weightTrend([{ date: '2026-10-12', kg: 80 }, { date: '2026-10-01', kg: 81 }], 'kg')
+    expect(t.points.map(p => p.v)).toEqual([81, 80])
+    expect(t.change).toBe(-1)
+    expect(weightTrend([{ date: '2026-10-12', kg: 80 }], 'lb').change).toBeNull()
+    expect(weightTrend(null).points).toEqual([])
+    expect(weightTrend([{ date: 'x', kg: 'no' }]).points).toEqual([])
+  })
+  it('the line is a path for two or more values, none otherwise, and stays inside its box', () => {
+    expect(sparkPath([1])).toBeNull()
+    expect(sparkPath([])).toBeNull()
+    const d = sparkPath([80, 81, 79], 120, 32, 3)
+    expect(d).toMatch(/^M3\.0 .* L117\.0 /)
+    const ys = [...d.matchAll(/ ([\d.]+)/g)].map(m => +m[1])
+    expect(Math.min(...ys)).toBeGreaterThanOrEqual(3)
+    expect(Math.max(...ys)).toBeLessThanOrEqual(29)
+    expect(sparkPath([5, 5])).toMatch(/^M/)
   })
 })

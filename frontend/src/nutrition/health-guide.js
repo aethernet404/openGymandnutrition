@@ -29,3 +29,30 @@ export const STEPS = [
 ]
 
 export const RELIABILITY = 'iOS does not let a Shortcut read Health while the iPhone is locked, so an automation that fires then may send nothing. Treat automations as best effort; the Home Screen button always works when you tap it.'
+
+/* ---------------- Health Auto Export (the iPhone app by Lybron Sobers) ---------------- */
+
+export const HAE_PATH = 'api/nutrition/health/hae'
+
+/** Where Health Auto Export posts: this server's address, whatever subpath it is served from. */
+export function haeEndpointUrl(loc = typeof location !== 'undefined' ? location : null) {
+  return (loc?.origin || '') + appBase(loc) + HAE_PATH
+}
+
+export const HAE_GUIDE_URL = 'https://github.com/aethernet404/openGymandnutrition/blob/HEAD/docs/NUTRITION_HEALTH_AUTO_EXPORT.md'
+
+// The metrics to switch on in the app's automation, by the names the app shows.
+export const HAE_METRICS = ['Active Energy', 'Resting Energy', 'Steps', 'Workouts', 'Exercise Minutes', 'Weight']
+
+export const HAE_STEPS = [
+  'Make a token above and copy it. It is shown once.',
+  'In Health Auto Export open Automations → + → REST API.',
+  'URL: the address above. Under Headers add Authorization with the value Bearer and your token (use “Copy header value”).',
+  'Data Type: Health Metrics. Export Format: JSON. Export Version: v2.',
+  'Metrics: turn on Active Energy, Resting Energy, Steps, Exercise Minutes and Weight. Turn on Include Workouts, or add a Workouts automation with the same URL and header. Leave the rest off.',
+  'Date Range: Today. Time Grouping: Days, with Summarize Data on. Each export then replaces the day’s numbers, so sending twice never counts twice.',
+  'Sync Cadence: every 1 hour is plenty. Calories only change when the app syncs.',
+  'Tap Manual Export once to test. This screen’s diary shows the numbers within seconds; if not, ask an admin to turn on the debug option below.'
+]
+
+export const HAE_PREMIUM = 'Background syncing (the Sync Cadence automation) is a premium feature of Health Auto Export, a paid subscription inside that app; you told us you saw a $6.99 yearly option (we could not verify the current price). The free app can still do a Manual Export: tap it whenever you want fresh numbers.'

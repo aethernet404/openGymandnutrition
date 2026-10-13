@@ -8,7 +8,8 @@ import { dateLocale } from '../lib/i18n.js'
 import { nt } from './i18n.js'
 import * as nutri from './api.js'
 import { openAddSheet, openEditEntry } from './sheets.jsx'
-import { EMPTY_TOTALS, MACRO_KEYS, MACRO_LABEL, MEALS, MEAL_LABEL, burnedOf, fraction, goalWithEatBack, macroLine, mealForHour, netOf, relativeDay, remaining, shiftISO, signed, trim, updatedText, validISO } from './diary.js'
+import { useStore } from '../store/useStore.js'
+import { EMPTY_TOTALS, MACRO_KEYS, MACRO_LABEL, MEALS, MEAL_LABEL, burnedOf, fraction, goalWithEatBack, macroLine, mealForHour, netOf, relativeDay, remaining, shiftISO, signed, sparkPath, trim, updatedText, validISO, weightText, weightTrend, workoutLine } from './diary.js'
 import './nutrition.css'
 
 const nf = n => Math.round(n || 0).toLocaleString(dateLocale())
@@ -71,6 +72,37 @@ function Summary({ totals, goals, health, eatBack, onGoals, onHealth }) {
   </div>
 }
 
+// Workouts and exercise minutes from Health Auto Export. For reading only: the calories here are already part
+// of Active Energy above, so they are not added to Burned or Net.
+function ActivityCard({ activity, unit }) {
+  if (!activity) return null
+  const ws = activity.workouts || []
+  return <div className="card nut-activity">
+    <div className="row between nut-meal-h">
+      <div><h2>{nt('Workouts')}</h2>{activity.exercise_min != null && <span className="muted small">{nt('{0} exercise min', nf(activity.exercise_min))}</span>}</div>
+    </div>
+    {ws.length ? <ul className="nut-workouts">{ws.map((w, i) => <li key={i}><span className="muted small">{w.time}</span> {workoutLine(w, unit)}</li>)}</ul> : <div className="dim small nut-none">{nt('No workouts this day')}</div>}
+    {ws.some(w => w.kcal != null) && <div className="dim small nut-energy-sub">{nt('Workout calories are already inside Active; they are not added again.')}</div>}
+  </div>
+}
+
+// Latest weight with a 30-day line, from Health Auto Export. Optional: with no data it says how to get it.
+function WeightCard({ weight, unit, onSetup }) {
+  if (!weight) return null
+  if (!weight.latest) return <button className="nut-energy-hint" onClick={onSetup}><Icon name="heart" /><span>{nt('No weight from Apple Health yet. Turn on Weight in the Health Auto Export automation')}</span><Icon name="chevronRight" /></button>
+  const { points, change } = weightTrend(weight.readings, unit)
+  const path = sparkPath(points.map(p => p.v))
+  return <div className="card nut-weight">
+    <div className="row between">
+      <div><div className="muted small">{nt('Weight')}</div><b className="nut-weight-v">{weightText(weight.latest.kg, unit)}</b></div>
+      {path ? <div className="center"><svg viewBox="0 0 120 32" width="120" height="32" role="img" aria-label={nt('Weight, last 30 days')}><path d={path} fill="none" stroke="var(--blue)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
+        {change != null && <div className="muted small">{nt('{0} in 30 days', (change > 0 ? '+' : change < 0 ? '−' : '') + Math.abs(change) + ' ' + unit)}</div>}</div>
+        : <span className="dim small">{nt('A line appears with two readings')}</span>}
+    </div>
+    <div className="dim small nut-energy-sub">{nt('Latest reading {0}', weight.latest.date)}</div>
+  </div>
+}
+
 function MealCard({ meal, entries, totals, onAdd, onEdit }) {
   return <div className="card nut-meal">
     <div className="row between nut-meal-h">
@@ -106,6 +138,14 @@ export default function Diary() {
   }, [date])
   useEffect(() => { setState(s => (s.day?.date === date ? s : { ...s, status: 'loading', day: null })); load() }, [load])
 
+  const unit = useStore(s => s.S?.unit) === 'lb' ? 'lb' : 'kg'
+  const [weight, setWeight] = useState(null)
+  useEffect(() => {
+    let live = true
+    Promise.resolve(nutri.getWeight(today)).then(w => { if (live) setWeight(w && typeof w === 'object' ? w : null) }).catch(() => { if (live) setWeight(null) })
+    return () => { live = false }
+  }, [today])
+
   const { day, status } = state
   const byMeal = m => (day?.entries || []).filter(e => e.meal === m)
   const defaultMeal = mealForHour(new Date().getHours())
@@ -140,6 +180,8 @@ export default function Diary() {
 
     {day && status !== 'off' && <>
       <Summary totals={day.totals || EMPTY_TOTALS} goals={day.goals} health={day.health} eatBack={day.eatBack} onGoals={() => nav('/nutrition/goals')} onHealth={() => nav('/nutrition/health')} />
+      <ActivityCard activity={day.activity} unit={unit} />
+      <WeightCard weight={weight} unit={unit} onSetup={() => nav('/nutrition/health')} />
       {status === 'error' && <div className="small" style={{ color: 'var(--red)', margin: '0 4px 10px' }}>{nt('Could not refresh: {0}', state.error)} <button className="linkbtn" onClick={load}>{nt('Try again')}</button></div>}
       {MEALS.map(m => <MealCard key={m} meal={m} entries={byMeal(m)} totals={day.byMeal?.[m] || EMPTY_TOTALS}
         onAdd={() => openAddSheet({ date, meal: m, onSaved: load })}

@@ -106,11 +106,27 @@ export function healthDay(d, date) {
   return { active_kcal: h.active, resting_kcal: h.resting, steps: h.steps ?? null, burned_kcal: round(h.active + h.resting, 1), updatedAt: h.updatedAt };
 }
 
+/** Exercise minutes and the day's workouts: for display only. Deliberately NOT part of healthDay, so nothing that
+    computes Burned or Net can reach workout calories. */
+export function activityDay(d, date) {
+  const a = d.health?.activity?.[date];
+  if (!a || (a.exerciseMin == null && !a.workouts?.length)) return null;
+  return { exercise_min: a.exerciseMin ?? null, workouts: a.workouts || [], updatedAt: a.updatedAt };
+}
+/** Latest weight (kg) and the last `days` days of readings, oldest first. */
+export function weightView(d, today, days = 30) {
+  const all = d.health?.weights || [];
+  const from = new Date(today + 'T12:00:00Z'); from.setUTCDate(from.getUTCDate() - days + 1);
+  const since = from.toISOString().slice(0, 10);
+  const latest = all.length ? all[all.length - 1] : null;
+  return { latest: latest ? { date: latest.date, kg: latest.kg } : null, readings: all.filter(w => w.date >= since).map(w => ({ date: w.date, kg: w.kg })), count: all.length };
+}
+
 export function dayView(d, date) {
   const entries = d.days[date]?.entries || [];
   const byMeal = {};
   for (const m of ['breakfast', 'lunch', 'dinner', 'snack']) byMeal[m] = totalsOf(entries.filter(e => e.meal === m));
-  return { date, entries, totals: totalsOf(entries), byMeal, goals: d.goals, health: healthDay(d, date), eatBack: eatBackOf(d) };
+  return { date, entries, totals: totalsOf(entries), byMeal, goals: d.goals, health: healthDay(d, date), activity: activityDay(d, date), eatBack: eatBackOf(d) };
 }
 
 /** Days with at least one entry in [from, to], oldest first. */

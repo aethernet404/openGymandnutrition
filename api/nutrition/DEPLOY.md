@@ -42,3 +42,7 @@ kubectl -n <ns> get deploy/<deployment> -o jsonpath='{.spec.replicas}{"\n"}'   #
 - Use a new tag per build (not `latest`) so the node pulls it and the PWA service worker sees a new build.
   After the first load, close and reopen the app once (or hard-refresh) to pick up the new frontend.
 - Roll back: `kubectl rollout undo deploy/<deployment>`. `/data/nutrition/` is left in place and ignored by the old image.
+- **Health Auto Export** (`POST /api/nutrition/health/hae`): no new env vars, volumes or outbound hosts. The iPhone
+  app calls your public address, so Cloudflare/nginx must let `POST /api/nutrition/health/hae` through with its
+  `Authorization` header (same as the Shortcut route). Payloads are small with Summarize Data on; the 5 MB `/api/`
+  limit in nginx applies. The optional admin debug switch (Goals → Health Auto Export debug) keeps data in memory only.
