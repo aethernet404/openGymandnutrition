@@ -1,6 +1,6 @@
 /* Nutrition. Built only from the app's own tokens (--surface, --acc, --label-*, …) so it follows
    the theme and accent; nothing here sets a colour of its own except the macro hues. */
-.nut{--m-protein:var(--blue);--m-carbs:var(--orange);--m-fat:var(--purple,#bf5af2)}
+.nut{min-width:0;overflow-wrap:break-word;--m-protein:var(--blue);--m-carbs:var(--orange);--m-fat:var(--purple,#bf5af2)}
 
 .nut-datebar{display:flex;align-items:center;gap:6px;margin:0 0 14px}
 .nut-datepick{position:relative;flex:1;text-align:center;font-size:17px;font-weight:600;letter-spacing:-.012em;padding:8px 6px;border-radius:10px;cursor:pointer}
@@ -39,16 +39,17 @@
 .nut-ai{font-size:13px;color:var(--acc);margin-inline-start:6px;vertical-align:-1px}
 .nut-kcal{font-variant-numeric:tabular-nums;font-weight:600;font-size:16px;flex:none}
 
-.nut-fields{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.nut-fields{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px}
+.nut-fields>*{min-width:0}
 .nut-field{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--label-2)}
-.nut-input{display:flex;align-items:center;gap:6px;background:var(--surface-2);border-radius:10px;padding:0 12px}
-.nut-input input{flex:1;min-width:0;background:transparent;border:0;padding:11px 0;font-size:17px;color:var(--label);outline:none}
+.nut-input{min-width:0;display:flex;align-items:center;gap:6px;background:var(--surface-2);border-radius:10px;padding:0 12px}
+.nut-input input{flex:1;width:0;min-width:0;box-sizing:border-box;background:transparent;border:0;padding:11px 0;font-size:17px;color:var(--label);outline:none}
 .nut-input i{font-style:normal;color:var(--label-2);font-size:14px}
 .nut-input .field{background:transparent}
-.nut-cap{width:84px;flex:none;margin-inline-end:8px}
+.nut-cap{width:7em;min-width:84px;max-width:45%;flex:none;margin-inline-end:8px}
 .nut-section-t{font-size:13px;font-weight:600;color:var(--label-2);text-transform:uppercase;letter-spacing:.04em;margin:16px 2px 8px}
-.nut-datefield{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:10px;font-size:17px}
-.nut-datefield .field{width:auto;background:var(--surface-2)}
+.nut-datefield{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px 12px;margin-top:10px;font-size:17px}
+.nut-datefield .field{width:auto;max-width:100%;min-width:0;background:var(--surface-2)}
 .nut-note{display:flex;gap:6px;align-items:center;color:var(--label-2);margin:-6px 0 10px}
 .nut-picked{font-size:17px;margin-top:6px}
 .nut-preview{font-size:17px;padding:10px 12px;border-radius:10px;background:var(--surface-2)}
@@ -96,7 +97,8 @@
 .nut-usda-help a{color:var(--acc);word-break:break-all}
 
 /* ---- AI logging ---- */
-.nut-ai-row{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:12px 0 6px}
+.nut-ai-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px;margin:12px 0 6px}
+.nut-ai-row>*{min-width:0}
 .nut-ai-why{color:var(--label-2);margin:0 2px 10px}
 .nut-ai-why.off{color:var(--orange)}
 .nut-photo{border-radius:14px;overflow:hidden;background:var(--surface-2);aspect-ratio:4/3;display:flex;align-items:center;justify-content:center;color:var(--label-3);font-size:40px}
@@ -131,8 +133,8 @@
 /* ---- Apple Health ---- */
 .nut-eat{margin-top:6px}
 .nut-energy{margin-top:16px;padding-top:14px;border-top:.5px solid var(--surface-3)}
-.nut-energy-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
-.nut-energy-grid>div{display:flex;flex-direction:column;gap:2px}
+.nut-energy-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.nut-energy-grid>div{display:flex;flex-direction:column;gap:2px;min-width:0;overflow-wrap:anywhere}
 .nut-energy-grid b{font-size:20px;font-weight:600;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
 .nut-energy-sub{margin-top:8px}
 .nut-energy-hint{display:flex;align-items:center;gap:8px;margin-top:14px;padding:10px 12px;border-radius:10px;background:var(--surface-2);color:var(--label-2);font-size:13px;text-align:start;width:100%}
@@ -147,3 +149,12 @@
 .nut-workouts{list-style:none;margin:8px 0 0;padding:0;font-size:14px;line-height:1.5}
 .nut-workouts li{padding:3px 0}
 .nut-weight-v{font-size:22px;font-weight:600;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+
+.nut-amount{margin:12px 0 0}
+.nut-amount-note{margin:6px 2px 0}
+.nut-manual{margin:10px 0 0}
+
+/* Nothing in a sheet or screen may be wider than the screen: long names wrap, banners and rows can shrink. */
+.nut-banner,.nut-preview,.nut-picked,.nut-note{min-width:0;overflow-wrap:anywhere}
+.nut-weight .row,.nut-activity .row{gap:12px}
+.nut-workouts li{overflow-wrap:anywhere}

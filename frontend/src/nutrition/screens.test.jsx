@@ -1239,3 +1239,92 @@ describe('Health Auto Export in the app', () => {
     expect(text()).toContain('never the token')
   })
 })
+
+describe('Edit entry: change how much you ate', () => {
+  const FOOD = { id: 'e9', meal: 'lunch', name: 'Cottage cheese', source: 'food', serving: '100 g', qty: 0.5, grams: 50, calories: 100, protein_g: 5, carbs_g: 10, fat_g: 2.5 }
+  const open = async (entry) => {
+    const onSaved = vi.fn()
+    m.api.updateEntry.mockResolvedValue({})
+    openEditEntry({ entry, date: '2026-10-12', onSaved })
+    return showSheet()
+  }
+  const field = (s, label) => s.el.querySelector(`input[aria-label="${label}"]`)
+  const macros = s => ['Calories', 'Protein', 'Carbs', 'Fat'].map(l => field(s, l).value)
+  const patchOf = () => m.api.updateEntry.mock.calls.at(-1)[2]
+
+  it('a food entry shows its servings and weight, and changing the weight recalculates everything from the per-serving values', async () => {
+    const s = await open(FOOD)
+    expect(s.el.textContent).toContain('One serving: 100 g')
+    expect(s.el.querySelector('input[aria-label="Weight in grams"]').value).toBe('50')
+    await setValue(s.el.querySelector('input[aria-label="Weight in grams"]'), '150')
+    expect(macros(s)).toEqual(['300', '15', '30', '7.5'])
+    expect(s.el.querySelector('.stp input').value).toBe('1.5')
+    await click(byText('button', 'Save'))
+    expect(patchOf()).toEqual({ meal: 'lunch', name: 'Cottage cheese', calories: 300, protein_g: 15, carbs_g: 30, fat_g: 7.5, qty: 1.5, grams: 150, base: { calories: 200, protein_g: 10, carbs_g: 20, fat_g: 5, grams: 100 } })
+  })
+
+  it('changing the servings changes the grams, the stepper works from the same base', async () => {
+    const s = await open(FOOD)
+    await click(s.el.querySelector('[aria-label="Increase Servings"]'))
+    expect(s.el.querySelector('input[aria-label="Weight in grams"]').value).toBe('75')      // 0.5 + 0.25 (100 g servings step by a quarter)
+    expect(macros(s)).toEqual(['150', '7.5', '15', '3.8'])
+  })
+
+  it('several edits never drift: going back to the original amount gives back the original numbers', async () => {
+    const odd = { ...FOOD, qty: 0.3, grams: 30, calories: 33, protein_g: 1.1, carbs_g: 3.3, fat_g: 0.7 }
+    const s = await open(odd)
+    for (const g of ['170', '45', '999', '77', '30']) await setValue(s.el.querySelector('input[aria-label="Weight in grams"]'), g)
+    expect(macros(s)).toEqual(['33', '1.1', '3.3', '0.7'])
+  })
+
+  it('a base saved with the entry is used as it is (not re-derived from the rounded totals)', async () => {
+    const withBase = { ...FOOD, qty: 1, grams: 100, calories: 52, protein_g: 0.3, carbs_g: 14, fat_g: 0.2, base: { calories: 52.3, protein_g: 0.26, carbs_g: 13.81, fat_g: 0.17, grams: 100 } }
+    const s = await open(withBase)
+    await setValue(s.el.querySelector('input[aria-label="Weight in grams"]'), '1000')
+    expect(macros(s)).toEqual(['523', '2.6', '138.1', '1.7'])
+  })
+
+  it('a number typed by hand after changing the amount is kept, says so, and can be recalculated', async () => {
+    const s = await open(FOOD)
+    await setValue(s.el.querySelector('input[aria-label="Weight in grams"]'), '100')       // 1 serving: 200 / 10 / 20 / 5
+    await setValue(field(s, 'Protein'), '99')
+    expect(s.el.textContent).toContain('You edited protein by hand')
+    await setValue(s.el.querySelector('input[aria-label="Weight in grams"]'), '200')       // 2 servings
+    expect(macros(s)).toEqual(['400', '99', '40', '10'])
+    await click(byText('button', 'Recalculate'))
+    expect(macros(s)).toEqual(['400', '20', '40', '10'])
+    expect(s.el.textContent).not.toContain('by hand')
+  })
+
+  it('editing a number without touching the amount sends only the numbers, as before', async () => {
+    const s = await open(FOOD)
+    await setValue(field(s, 'Calories'), '120')
+    await click(byText('button', 'Save'))
+    expect(patchOf()).toEqual({ meal: 'lunch', name: 'Cottage cheese', calories: 120, protein_g: 5, carbs_g: 10, fat_g: 2.5 })
+  })
+
+  it('AI and Quick add entries have no food behind them: an amount multiplier scales the logged numbers in proportion', async () => {
+    for (const source of ['ai', 'quick']) {
+      m.api.updateEntry.mockReset()
+      const s = await open({ id: 'x' + source, meal: 'dinner', name: 'Pasta', source, calories: 600, protein_g: 20, carbs_g: 90, fat_g: 15 })       // no qty at all (older entries)
+      expect(s.el.textContent).toContain('Amount (× as logged)')
+      expect(s.el.querySelector('input[aria-label="Weight in grams"]')).toBeNull()
+      await click(s.el.querySelector('[aria-label="Increase Amount multiplier"]'))        // 1 → 1.5
+      expect(macros(s)).toEqual(['900', '30', '135', '22.5'])
+      await click(byText('button', 'Save'))
+      expect(patchOf()).toMatchObject({ calories: 900, protein_g: 30, carbs_g: 135, fat_g: 22.5, qty: 1.5, base: { calories: 600, protein_g: 20, carbs_g: 90, fat_g: 15, grams: null } })
+      expect(patchOf().grams).toBeUndefined()
+    }
+  })
+
+  it('old entries (no qty, no grams, no serving, no base) open and save without errors', async () => {
+    const s = await open({ id: 'old', meal: 'snack', name: 'Apple', source: 'food', calories: 80, protein_g: 0, carbs_g: 20, fat_g: 0 })
+    expect(s.el.textContent).toContain('Edit entry')
+    expect(s.el.querySelector('input[aria-label="Weight in grams"]')).toBeNull()
+    await setValue(field(s, 'Calories'), '90')
+    await click(byText('button', 'Save'))
+    expect(patchOf().calories).toBe(90)
+    const s2 = await open({ id: 'older', meal: 'snack', name: 'Odd', calories: 10, qty: 0 })           // missing macros, qty 0
+    expect(s2.el.textContent).toContain('Edit entry')
+  })
+})

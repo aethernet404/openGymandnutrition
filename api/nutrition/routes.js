@@ -98,6 +98,7 @@ export function nutritionRoutes({
     for (const k of ['protein_g', 'carbs_g', 'fat_g']) e[k] = v.round(f.per[k] * q, 1);
     e.name ||= f.name; e.brand ||= f.brand; e.serving ||= f.serving.label;
     if (e.grams === undefined && f.serving.grams) e.grams = v.round(f.serving.grams * q, 1);
+    if (!e.base) e.base = { calories: f.per.calories, protein_g: f.per.protein_g, carbs_g: f.per.carbs_g, fat_g: f.per.fat_g, grams: f.serving.grams || null };
     delete e.needsFood;
     return null;
   }

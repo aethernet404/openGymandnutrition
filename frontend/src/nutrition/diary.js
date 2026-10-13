@@ -181,3 +181,52 @@ export function sparkPath(values, w = 120, h = 32, pad = 3) {
   const lo = Math.min(...values), hi = Math.max(...values), span = hi - lo || 1
   return values.map((v, i) => `${i ? 'L' : 'M'}${(pad + (w - 2 * pad) * i / (values.length - 1)).toFixed(1)} ${(h - pad - (h - 2 * pad) * (v - lo) / span).toFixed(1)}`).join(' ')
 }
+
+/* ---------- changing the amount of an entry already in the diary ---------- */
+
+const MACRO_ROUND = { calories: 0, protein_g: 1, carbs_g: 1, fat_g: 1 }
+const cleanNum = v => (Number.isFinite(v) && v >= 0 ? v : 0)
+
+/**
+ * What one unit of an entry (one serving, or for an entry with no food behind it, the portion as logged) is
+ * worth. A saved entry carries it as `base`; an older one, or one from AI logging or Quick add, has none, so it
+ * is worked out from the totals ÷ qty (qty 1 when absent). From here on the base never changes, so any number
+ * of amount edits is always base × amount and rounding cannot build up.
+ * @returns {{ per:{calories,protein_g,carbs_g,fat_g}, gramsPer:number|null, qty:number }}
+ */
+export function entryBase(e) {
+  const qty = Number.isFinite(e.qty) && e.qty > 0 ? e.qty : 1
+  const b = e.base
+  if (b && Number.isFinite(b.calories)) {
+    return { per: { calories: cleanNum(b.calories), protein_g: cleanNum(b.protein_g), carbs_g: cleanNum(b.carbs_g), fat_g: cleanNum(b.fat_g) }, gramsPer: b.grams > 0 ? b.grams : null, qty }
+  }
+  const per = {}
+  for (const k of MACRO_KEYS_ALL) per[k] = Math.round(cleanNum(e[k]) / qty * 1000) / 1000
+  return { per, gramsPer: e.grams > 0 ? Math.round(e.grams / qty * 100) / 100 : null, qty }
+}
+const MACRO_KEYS_ALL = ['calories', 'protein_g', 'carbs_g', 'fat_g']
+
+/**
+ * The numbers for `qty` units of a base. Keys in `manual` (a value the person typed) are left exactly as they
+ * are in `current`; the others follow the amount.
+ */
+export function scaleEntry(base, qty, current = {}, manual = {}) {
+  const out = {}
+  for (const k of MACRO_KEYS_ALL) {
+    if (manual[k] && current[k] !== undefined) { out[k] = current[k]; continue }
+    const k10 = 10 ** MACRO_ROUND[k]
+    out[k] = Math.round(base.per[k] * qty * k10) / k10
+  }
+  return out
+}
+
+/** Grams for an amount, one decimal; null when the entry has no weight. */
+export const gramsForQty = (base, qty) => (base.gramsPer ? Math.round(base.gramsPer * qty * 10) / 10 : null)
+/** Amount for a weight, two decimals (what the server keeps); null when there is no weight or the weight is not a positive number. */
+export const qtyForGramsOf = (base, g) => (base.gramsPer && Number.isFinite(g) && g > 0 ? Math.round(g / base.gramsPer * 100) / 100 || null : null)
+
+/** The fields to send when the amount changed: the amount, the weight, and the unchanging base (stored with the entry). */
+export function amountPatch(base, qty) {
+  const g = gramsForQty(base, qty)
+  return { qty, ...(g != null ? { grams: g } : {}), base: { ...base.per, grams: base.gramsPer } }
+}

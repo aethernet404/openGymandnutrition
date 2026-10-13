@@ -14,7 +14,7 @@ import AiLog from './AiLog.jsx'
 import { allowanceText, unavailableText } from './ai.js'
 import { nt } from './i18n.js'
 import * as nutri from './api.js'
-import { MEALS, MEAL_LABEL, foodBody, macroLine, quickBody, scaleFood, trim } from './diary.js'
+import { MACRO_LABEL, MEALS, MEAL_LABEL, amountPatch, entryBase, foodBody, gramsForQty, macroLine, qtyForGramsOf, quickBody, scaleEntry, scaleFood, trim } from './diary.js'
 import { SOURCE_LABEL, SOURCE_SHORT, barcodeOf, defaultBase, gramsOf, hitLine, qtyForGrams, snapshotOf, sourceNotes } from './lookup.js'
 import { NO_CODE_TEXT, gtinCheckOk, lookupCode, scanMethods } from './barcode.js'
 import * as finder from './search.js'
@@ -372,6 +372,27 @@ function EditEntry({ entry, date, onSaved, close }) {
   const [day, setDay] = useState(date)
   const [m, setM] = useState({ calories: entry.calories, protein_g: entry.protein_g, carbs_g: entry.carbs_g, fat_g: entry.fat_g })
   const [busy, setBusy] = useState(false)
+  // The amount. `base` is what one unit is worth and never changes while this sheet is open (nor, once saved,
+  // afterwards), so every amount is base × amount and edits cannot compound rounding. Numbers typed by hand
+  // after the amount was changed are remembered in `manual` and are not overwritten by later amount changes.
+  const base = useRef(entryBase(entry)).current
+  const [qty, setQty] = useState(base.qty)
+  const [manual, setManual] = useState({})
+  const hasFood = entry.source === 'food'
+  const grams = gramsForQty(base, qty)
+  const changed = qty !== base.qty
+  const applyQty = (q, keep = manual) => {
+    if (!(q >= 0.01 && q <= 1000)) return
+    setQty(q)
+    setM(cur => ({ ...cur, ...scaleEntry(base, q, cur, keep) }))
+  }
+  const editMacro = next => {
+    const k = Object.keys(next).find(key => next[key] !== m[key])
+    setM(next)
+    if (k && changed) setManual(cur => ({ ...cur, [k]: true }))
+  }
+  const manualKeys = Object.keys(manual).filter(k => manual[k])
+  const resetManual = () => { setManual({}); setM(cur => ({ ...cur, ...scaleEntry(base, qty, cur, {}) })) }
 
   const save = async () => {
     const r = quickBody({ name, meal, ...m }, day)
@@ -379,7 +400,7 @@ function EditEntry({ entry, date, onSaved, close }) {
     const { date: _d, source: _s, ...patch } = r.body
     setBusy(true)
     try {
-      await nutri.updateEntry(date, entry.id, { ...patch, ...(day !== date ? { newDate: day } : {}) })
+      await nutri.updateEntry(date, entry.id, { ...patch, ...(changed ? amountPatch(base, qty) : {}), ...(day !== date ? { newDate: day } : {}) })
       onSaved(); close(); toast(nt('Saved'))
     } catch (e) { fail(e); setBusy(false) }
   }
@@ -392,9 +413,19 @@ function EditEntry({ entry, date, onSaved, close }) {
     <h3>{nt('Edit entry')}</h3>
     {entry.source === 'ai' && <div className="nut-note small"><Icon name="sparkles" /> {nt('Estimated by AI — check the numbers.')}</div>}
     <TextField value={name} maxLength={120} onChange={e => setName(e.target.value)} aria-label={nt('Name')} />
-    {(entry.serving || entry.qty > 0) && entry.source === 'food' && <div className="muted small" style={{ margin: '6px 2px 0' }}>{trim(entry.qty)} × {entry.serving}</div>}
+    {hasFood && entry.serving && <div className="muted small" style={{ margin: '6px 2px 0' }}>{nt('One serving: {0}', entry.serving)}</div>}
+    <div className="row between nut-amount">
+      <span>{hasFood ? nt('Servings') : nt('Amount (× as logged)')}</span>
+      <Stepper value={qty} step={base.gramsPer === 100 ? 0.25 : 0.5} min={0.01} max={1000} onChange={applyQty} ariaLabel={hasFood ? nt('Servings') : nt('Amount multiplier')} />
+    </div>
+    {grams != null && <label className="nut-datefield nut-amount">
+      <span>{nt('Weight')}</span>
+      <span className="nut-input nut-cap"><NumberField value={grams} onChange={g => { const q = qtyForGramsOf(base, g); if (q) applyQty(q) }} aria-label={nt('Weight in grams')} /><i>g</i></span>
+    </label>}
+    {!hasFood && <div className="muted small nut-amount-note">{nt('Scales the numbers you logged in proportion. For an estimate, that is as good as the estimate was.')}</div>}
     <div style={{ height: 10 }} />
-    <MacroFields v={m} set={setM} />
+    <MacroFields v={m} set={editMacro} />
+    {manualKeys.length > 0 && <div className="nut-banner nut-manual"><span>{nt('You edited {0} by hand. It stays as you set it when you change the amount.', manualKeys.map(k => nt(MACRO_LABEL[k]).toLowerCase()).join(', '))}</span> <button className="linkbtn" onClick={resetManual}>{nt('Recalculate')}</button></div>}
     <div style={{ height: 10 }} />
     <SelectRow title={nt('Meal')} sheetTitle={nt('Meal')} value={meal} onChange={setMeal} options={mealOptions()} />
     <label className="nut-datefield"><span>{nt('Date')}</span><input className="field" type="date" value={day} onChange={e => e.target.value && setDay(e.target.value)} /></label>

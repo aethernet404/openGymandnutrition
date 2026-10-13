@@ -157,6 +157,24 @@ export function entry(body, { partial = false, foodGiven = false } = {}) {
     if (body.confidence !== null && !CONFIDENCE.includes(body.confidence)) return bad(`confidence must be one of ${CONFIDENCE.join(', ')}`);
     out.confidence = body.confidence;
   }
+  // The per-serving values this entry was made from. Kept so that changing the amount later is always
+  // base × amount, never a re-scaling of already rounded totals (which would drift with each edit).
+  if (body.base !== undefined) {
+    if (body.base === null) out.base = null;
+    else {
+      if (!isObj(body.base)) return bad('base must be an object');
+      const b = {};
+      for (const k of MACROS) {
+        const r = num(body.base[k], `base ${k}`, LIMITS[k]);
+        if (!r.ok) return r;
+        b[k] = round(r.value, k === 'calories' ? 2 : 3);
+      }
+      const g = num(body.base.grams ?? null, 'base grams', LIMITS.grams, { nullable: true });
+      if (!g.ok) return g;
+      b.grams = g.value == null || g.value === 0 ? null : round(g.value, 2);
+      out.base = b;
+    }
+  }
   if (body.foodId !== undefined) out.foodId = body.foodId == null ? null : clean(body.foodId, 40) || null;
   if (body.note !== undefined) out.note = clean(body.note, 200);
 

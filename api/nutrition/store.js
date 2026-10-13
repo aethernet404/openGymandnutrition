@@ -202,6 +202,7 @@ export function updateEntry(d, date, id, patch, newDate) {
   if (!hit) return null;
   const next = { ...hit.entry, ...patch, updated: Date.now() };
   if (next.confidence === null) delete next.confidence;
+  if (next.base == null) delete next.base;
   if (newDate && newDate !== date) {
     const target = (d.days[newDate] ||= { entries: [] });
     if (target.entries.length >= LIMITS.entriesPerDay) throw new NutritionLimitError(`a day can hold at most ${LIMITS.entriesPerDay} entries`);

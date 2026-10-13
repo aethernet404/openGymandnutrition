@@ -16,7 +16,7 @@ switched Nutrition off.
 | `GET /api/nutrition/day?date=YYYY-MM-DD` | entries, totals, per-meal totals, goals |
 | `GET /api/nutrition/range?from=&to=` | per-day totals (≤ 400 days) + goals |
 | `POST /api/nutrition/entries` | `{date, meal, name, calories, protein_g, carbs_g, fat_g, qty?, serving?, grams?, source?, confidence?, foodId?}` or `{date, meal?, entries:[…]}` (≤ 30). With `foodId` and no macros, macros = food × `qty` |
-| `PUT /api/nutrition/entries?date=&id=` | partial edit; body `newDate` moves it to another day |
+| `PUT /api/nutrition/entries?date=&id=` | partial edit; body `newDate` moves it to another day. An amount change sends `qty`, `grams`, the new totals and `base` (per-one-qty `{calories, protein_g, carbs_g, fat_g, grams}`, kept so later edits are base × amount; entries made from a food get it automatically, older ones have none and the app derives it from totals ÷ qty) |
 | `DELETE /api/nutrition/entries?date=&id=` | |
 | `GET /api/nutrition/foods?scope=all\|custom\|favorite\|recent&q=` | |
 | `POST /api/nutrition/foods` | custom food `{name, brand?, serving?, grams?, per:{calories,protein_g,carbs_g,fat_g}, ext?}` |

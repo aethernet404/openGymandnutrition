@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   shiftISO, validISO, relativeDay, mealForHour, fraction, remaining, macroSplit, kcalFromMacros,
-  scaleFood, parseAmount, quickBody, foodBody, goalsBody, macroLine, kgToUnit, weightText, workoutLine, weightTrend, sparkPath
+  scaleFood, parseAmount, quickBody, foodBody, goalsBody, macroLine, kgToUnit, weightText, workoutLine, weightTrend, sparkPath, entryBase, scaleEntry, gramsForQty, qtyForGramsOf, amountPatch
 } from './diary.js'
 
 describe('dates', () => {
@@ -176,5 +176,49 @@ describe('Health Auto Export extras', () => {
     expect(Math.min(...ys)).toBeGreaterThanOrEqual(3)
     expect(Math.max(...ys)).toBeLessThanOrEqual(29)
     expect(sparkPath([5, 5])).toMatch(/^M/)
+  })
+})
+
+describe('changing the amount of an entry', () => {
+  const old = { calories: 33, protein_g: 1.1, carbs_g: 3.3, fat_g: 0.7, qty: 0.3, grams: 30 }
+  it('the base is the saved base, or else totals ÷ qty (qty 1 when absent)', () => {
+    expect(entryBase({ ...old, base: { calories: 110, protein_g: 3.667, carbs_g: 11, fat_g: 2.333, grams: 100 } }).per.calories).toBe(110)
+    const b = entryBase(old)
+    expect(b.qty).toBe(0.3); expect(b.per.calories).toBe(110); expect(b.gramsPer).toBe(100)
+    const ai = entryBase({ calories: 600, protein_g: 20, carbs_g: 90, fat_g: 15 })
+    expect(ai.qty).toBe(1); expect(ai.per).toEqual({ calories: 600, protein_g: 20, carbs_g: 90, fat_g: 15 }); expect(ai.gramsPer).toBeNull()
+  })
+  it('junk in an old entry cannot make NaN or negative numbers', () => {
+    const b = entryBase({ calories: 'x', qty: -2, protein_g: NaN, grams: -5 })
+    expect(Object.values(b.per).every(v => v === 0)).toBe(true)
+    expect(b.qty).toBe(1); expect(b.gramsPer).toBeNull()
+    expect(entryBase({ calories: 10, qty: 0 }).per.calories).toBe(10)
+  })
+  it('amount × base, rounded like the server (kcal whole, macros one decimal)', () => {
+    const b = entryBase({ calories: 200, protein_g: 10, carbs_g: 20, fat_g: 5, qty: 1, grams: 100 })
+    expect(scaleEntry(b, 1.5)).toEqual({ calories: 300, protein_g: 15, carbs_g: 30, fat_g: 7.5 })
+    expect(scaleEntry(b, 0.33)).toEqual({ calories: 66, protein_g: 3.3, carbs_g: 6.6, fat_g: 1.7 })
+  })
+  it('many edits in a row come back to the start exactly', () => {
+    const b = entryBase(old)
+    let cur = { calories: 33, protein_g: 1.1, carbs_g: 3.3, fat_g: 0.7 }
+    for (const q of [1.7, 0.45, 9.99, 0.77, 3, 0.3]) cur = scaleEntry(b, q, cur)
+    expect(cur).toEqual({ calories: 33, protein_g: 1.1, carbs_g: 3.3, fat_g: 0.7 })
+  })
+  it('numbers set by hand are kept, the rest follow', () => {
+    const b = entryBase({ calories: 200, protein_g: 10, carbs_g: 20, fat_g: 5, qty: 1 })
+    expect(scaleEntry(b, 2, { calories: 400, protein_g: 99, carbs_g: 40, fat_g: 10 }, { protein_g: true })).toEqual({ calories: 400, protein_g: 99, carbs_g: 40, fat_g: 10 })
+    expect(scaleEntry(b, 3, { calories: 400, protein_g: 99, carbs_g: 40, fat_g: 10 }, { protein_g: true })).toEqual({ calories: 600, protein_g: 99, carbs_g: 60, fat_g: 15 })
+  })
+  it('grams and servings stay in step; no weight, no conversion', () => {
+    const b = entryBase({ calories: 200, qty: 2, grams: 200 })
+    expect(gramsForQty(b, 1.5)).toBe(150); expect(qtyForGramsOf(b, 150)).toBe(1.5)
+    expect(qtyForGramsOf(b, 0)).toBeNull(); expect(qtyForGramsOf(b, NaN)).toBeNull()
+    expect(gramsForQty(entryBase({ calories: 5 }), 2)).toBeNull(); expect(qtyForGramsOf(entryBase({ calories: 5 }), 50)).toBeNull()
+  })
+  it('the patch carries amount, weight and the unchanging base', () => {
+    const b = entryBase({ calories: 200, protein_g: 10, carbs_g: 20, fat_g: 5, qty: 1, grams: 100 })
+    expect(amountPatch(b, 2)).toEqual({ qty: 2, grams: 200, base: { calories: 200, protein_g: 10, carbs_g: 20, fat_g: 5, grams: 100 } })
+    expect(amountPatch(entryBase({ calories: 5 }), 2).grams).toBeUndefined()
   })
 })
