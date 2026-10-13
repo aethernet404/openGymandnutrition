@@ -26,6 +26,9 @@ switched Nutrition off.
 | `GET /api/nutrition/barcode?code=` | Open Food Facts product by 8–14 digit barcode |
 | `POST /api/nutrition/analyze` | `{kind:'photo', image:<base64 jpeg/png/webp>, note?}` or `{kind:'text', text}` → an editable **draft** (nothing saved). Coach's Claude Agent SDK path, inline image, own daily allowance |
 | `PUT /api/nutrition/coach-share` | `{share:boolean}` opt in/out of the numbers-only summary the Coach may read (default off) |
+| `POST /api/nutrition/health` | **Apple Health ingest.** `Authorization: Bearer ogh_…` (no cookie): `{date, active_kcal, resting_kcal, steps?}`. The ONLY route that accepts the Health token; replaces that day's numbers; both energies 0 is refused (a locked iPhone). 60/hour per token, wrong tokens lock the address. Guide: `docs/NUTRITION_APPLE_HEALTH.md` |
+| `GET` / `POST` / `DELETE /api/nutrition/health/token` | status (hint, created, last used) / make or replace (the full token is in this response only) / revoke |
+| `PUT /api/nutrition/health/settings` | `{eatBack:{enabled, percent 0–100}}`, off by default |
 | `GET` / `PUT /api/nutrition/goals` | `{calories, protein_g, carbs_g, fat_g}`, each a number or null |
 | `GET` / `PUT /api/admin/nutrition` | admin: `{ enabled, aiDailyCap (0–500, 0 = AI off, default 30), usdaKey }` (the key is write-only, encrypted at rest; reads return `usdaKeySet` and the last 4 characters) |
 | `POST /api/admin/nutrition/test-usda` | admin: checks the stored USDA key with a real search |
@@ -49,4 +52,4 @@ destination: the Claude runtime talks to Anthropic exactly as the Coach does.
 ## Files in this module
 `routes.js` (HTTP), `store.js` (per-profile file, write queue), `validate.js`, `config.js` (admin settings),
 `lookup.js` (OFF/USDA), `analyze.js` + `vision.js` + `pipeline.js` + `meal.js` + `prompt.js` (AI estimate),
-`jobdir.js`, `coach-summary.js` (the Coach's read-only view), `spike/` (Phase 1 live check).
+`health.js` (Apple Health token + ingest), `jobdir.js`, `coach-summary.js` (the Coach's read-only view), `spike/` (Phase 1 live check).

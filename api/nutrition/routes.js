@@ -10,13 +10,23 @@ import * as store from './store.js';
 import * as v from './validate.js';
 import * as coachCfg from '../coach/config.js';
 import { createLookup, cleanBarcode } from './lookup.js';
-import { createWindow } from '../rate-limit.js';
+import * as health from './health.js';
+import { createWindow, createBackoff } from '../rate-limit.js';
 import { createAnalyzer, availability, checkInput, FAILURES } from './analyze.js';
 
 const URL_BASE = 'http://x';
 const query = req => new URL(req.url, URL_BASE).searchParams;
 
-export function nutritionRoutes({ json, readBody, readSession, requireAdmin, lookup = createLookup(), analyzer = createAnalyzer() }) {
+export function nutritionRoutes({
+  json, readBody, readSession, requireAdmin, lookup = createLookup(), analyzer = createAnalyzer(),
+  // server.js supplies the address its sign-in throttle counts (proxy headers handled there) and whether a
+  // profile still exists and is enabled; the defaults suit tests and a bare node run.
+  limitAddress = req => String(req.socket?.remoteAddress || 'unknown'), userActive = () => true
+}) {
+  // The Apple Health token: wrong tokens count against the caller's address (ten free, then locks of a
+  // minute doubling up to an hour); right ones are limited per token.
+  const badTokens = createBackoff({ free: 10, baseMs: 60000, maxMs: 3600000 });
+  const perToken = createWindow({ max: 60, windowMs: 3600000 });
   // Lookups go out to third parties from this server's address, so they are budgeted per profile.
   const lookups = createWindow({ max: 40, windowMs: 60000 });
   const throttled = (res, user) => {
@@ -87,7 +97,8 @@ export function nutritionRoutes({ json, readBody, readSession, requireAdmin, loo
         ai: { limit: c.aiDailyCap, used, remaining: Math.max(0, c.aiDailyCap - used), available: avail.ok && c.aiDailyCap > 0, reason: c.aiDailyCap === 0 ? 'off' : avail.ok ? null : avail.code },
         lookup: { off: true, usda: c.usdaKeySet }, meals: v.MEALS,
         // Whether there is a Coach to share with at all, and whether this profile has chosen to.
-        coach: { available: coachCfg.isEnabled() && coachCfg.isConnected(), share: d.coachShare === true }
+        coach: { available: coachCfg.isEnabled() && coachCfg.isConnected(), share: d.coachShare === true },
+        health: { ...health.tokenStatus(user.id), eatBack: store.eatBackOf(d) }
       });
     }),
 
@@ -234,6 +245,47 @@ export function nutritionRoutes({ json, readBody, readSession, requireAdmin, loo
       if (!code) return fail(res, 400, 'a barcode is 8 to 14 digits');
       if (throttled(res, user)) return;
       json(res, 200, { code, ...(await lookup.barcode(code)) });
+    }),
+
+    /* ----- Apple Health, via a Shortcut ----- */
+
+    // THE ONLY ROUTE THAT TAKES THE APPLE HEALTH TOKEN. No session, no cookie: a Bearer token made in
+    // the app's settings. It can write one day's numbers and read nothing.
+    'POST /api/nutrition/health': async (req, res) => {
+      if (!cfg.load().enabled) return json(res, 503, { error: 'nutrition is switched off on this instance', code: 'off' });
+      const addr = limitAddress(req);
+      const wait = badTokens.retryAfter(addr);
+      if (wait) return json(res, 429, { error: 'too many attempts, try again later', code: 'locked', retryAfter: wait }, { 'Retry-After': String(wait) });
+      const auth = health.authenticate(req.headers?.authorization);
+      // A token for a profile that is gone or disabled is dead; its index entry goes with it.
+      if (auth && !userActive(auth.uid)) { await health.forget(auth.id).catch(() => {}); badTokens.fail(addr); return json(res, 401, { error: 'invalid token' }); }
+      if (!auth) { badTokens.fail(addr); return json(res, 401, { error: 'invalid token' }); }
+      const slow = perToken.take(auth.id);
+      if (slow) return json(res, 429, { error: 'too many updates; wait a bit', code: 'rate', retryAfter: slow }, { 'Retry-After': String(slow) });
+      const checked = health.validateIngest(await readBody(req));
+      if (!checked.ok) return json(res, 400, { error: checked.error, ...(checked.field ? { field: checked.field } : {}) });
+      let out;
+      try { out = await health.record(auth.uid, auth.id, checked.value); }
+      catch (e) { if (e instanceof store.NutritionDataError) return fail(res, 500, 'could not store the numbers'); throw e; }
+      if (!out) return json(res, 401, { error: 'invalid token' });        // the token was replaced while this request ran
+      json(res, 200, { ok: true, ...out });
+    },
+
+    'GET /api/nutrition/health/token': guarded(async (req, res, user) => { json(res, 200, health.tokenStatus(user.id)); }),
+
+    // Make (or replace) the token. The only response that ever contains it.
+    'POST /api/nutrition/health/token': guarded(async (req, res, user) => {
+      const t = await health.createToken(user.id);
+      json(res, 201, { token: t.token, createdAt: t.createdAt, rotated: t.rotated, hint: '…' + t.id.slice(-4) });
+    }),
+
+    'DELETE /api/nutrition/health/token': guarded(async (req, res, user) => { json(res, 200, { revoked: await health.revokeToken(user.id) }); }),
+
+    // "Eat back": off by default; adds a share of the day's active calories to the calorie goal.
+    'PUT /api/nutrition/health/settings': guarded(async (req, res, user) => {
+      const eb = (await readBody(req))?.eatBack;
+      if (!eb || typeof eb.enabled !== 'boolean' || !Number.isInteger(eb.percent) || eb.percent < 0 || eb.percent > 100) return fail(res, 400, 'eatBack must be { enabled: true|false, percent: a whole number from 0 to 100 }');
+      json(res, 200, { eatBack: await health.setEatBack(user.id, eb) });
     }),
 
     /* ----- AI logging: a draft only. Nothing is saved until the person confirms it (POST /entries) ----- */

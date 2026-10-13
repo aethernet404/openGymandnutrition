@@ -14,13 +14,14 @@ const m = vi.hoisted(() => ({
   user: { id: 'u1', name: 'Me', admin: false },
   sheets: [],
   downscale: vi.fn(),
+  copy: vi.fn(async () => true),
   decode: vi.fn(),
   toast: vi.fn(),
   confirm: vi.fn(),
   api: {
     getDay: vi.fn(), getConfig: vi.fn(), addEntries: vi.fn(), updateEntry: vi.fn(), deleteEntry: vi.fn(),
     listFoods: vi.fn(), createFood: vi.fn(), updateFood: vi.fn(), deleteFood: vi.fn(), getGoals: vi.fn(), putGoals: vi.fn(),
-    getAdmin: vi.fn(), putAdmin: vi.fn(), getRange: vi.fn(), searchFoods: vi.fn(), lookupBarcode: vi.fn(), testUsda: vi.fn(), analyze: vi.fn(), setCoachShare: vi.fn()
+    getAdmin: vi.fn(), putAdmin: vi.fn(), getRange: vi.fn(), searchFoods: vi.fn(), lookupBarcode: vi.fn(), testUsda: vi.fn(), analyze: vi.fn(), setCoachShare: vi.fn(), createHealthToken: vi.fn(), revokeHealthToken: vi.fn(), putHealthSettings: vi.fn(), getHealthToken: vi.fn()
   }
 }))
 
@@ -41,6 +42,7 @@ vi.mock('../store/useUI.js', () => {
 })
 vi.mock('../sheets.jsx', () => ({ confirmSheet: (...a) => m.confirm(...a) }))
 vi.mock('./api.js', () => m.api)
+vi.mock('../lib/clipboard.js', () => ({ copyText: (...a) => m.copy(...a) }))
 vi.mock('./image.js', () => ({ downscaleToJpeg: (...a) => m.downscale(...a) }))
 vi.mock('./barcode-decode.js', () => ({ decodeFile: (...a) => m.decode(...a) }))
 
@@ -49,6 +51,7 @@ const { default: NutritionHomeCard } = await import('./HomeCard.jsx')
 const { default: Nutrition } = await import('./Nutrition.jsx')
 const { default: Goals } = await import('./Goals.jsx')
 const { default: Foods } = await import('./Foods.jsx')
+const { default: Health } = await import('./Health.jsx')
 const { openAddSheet, openEditEntry, openFoodSheet } = await import('./sheets.jsx')
 
 let host, root
@@ -93,6 +96,7 @@ const dayOf = (over = {}) => ({
   totals: { calories: 950, protein_g: 50, carbs_g: 110, fat_g: 25 },
   byMeal: { breakfast: { calories: 300, protein_g: 10, carbs_g: 50, fat_g: 5 }, lunch: { calories: 650, protein_g: 40, carbs_g: 60, fat_g: 20 }, dinner: { calories: 0, protein_g: 0, carbs_g: 0, fat_g: 0 }, snack: { calories: 0, protein_g: 0, carbs_g: 0, fat_g: 0 } },
   goals: { calories: 2400, protein_g: 160, carbs_g: null, fat_g: 70 },
+  health: null, eatBack: { enabled: false, percent: 50 },
   ...over
 })
 
@@ -853,6 +857,168 @@ describe('AI logging', () => {
     await click(byText('button', 'Log it by hand instead'))
     expect(s.el.querySelector('input[placeholder="Name (optional)"]').value).toBe('soup')
     expect(m.api.analyze).not.toHaveBeenCalled()
+  })
+})
+
+
+const HEALTH = { active_kcal: 640, resting_kcal: 1670, steps: 8000, burned_kcal: 2310, updatedAt: new Date(2020, 0, 5, 14, 5).getTime() }
+
+describe('Apple Health in the diary', () => {
+  it('without numbers: a short hint that leads to the setup, not zeros', async () => {
+    await mount(<Diary />)
+    expect(text()).toContain('No Apple Health numbers for this day')
+    expect(text()).not.toContain('Burned')
+    expect(text()).not.toMatch(/Net\s*0/)
+    await click(byText('button', 'No Apple Health numbers for this day'))
+    expect(where).toBe('/nutrition/health')
+  })
+
+  it('with numbers: eaten, burned and net, how burned is made up, and when it arrived', async () => {
+    m.api.getDay.mockResolvedValue(dayOf({ health: HEALTH }))
+    await mount(<Diary />)
+    const t = text()
+    expect(t).toContain('Eaten'); expect(t).toContain('Burned'); expect(t).toContain('Net')
+    expect(t).toMatch(/2,?310/)                       // burned = 640 + 1,670
+    expect(t).toContain('−1,360'.replace(',', (1000).toLocaleString().charAt(1) || ','))   // net = 950 − 2,310
+    expect(t).toMatch(/Active 640 \+ resting 1,?670/)
+    expect(t).toMatch(/8,?000 steps/)
+    expect(t).toContain('Net is eaten − burned')
+    expect(t).toMatch(/Updated .*(14:05|2:05)/)       // it was a different day, so the date comes with the time
+    expect(t).not.toContain('No Apple Health numbers')
+  })
+
+  it('a day with more eaten than burned has a plus sign, not a verdict', async () => {
+    m.api.getDay.mockResolvedValue(dayOf({ health: { ...HEALTH, active_kcal: 100, resting_kcal: 800 }, totals: { calories: 1500, protein_g: 50, carbs_g: 110, fat_g: 25 } }))
+    await mount(<Diary />)
+    expect(text()).toContain('+600')
+  })
+
+  it('never talks about dieting, deficits or weight loss', async () => {
+    m.api.getDay.mockResolvedValue(dayOf({ health: HEALTH }))
+    await mount(<Diary />)
+    expect(text()).not.toMatch(/deficit|surplus|diet|lose weight|weight loss|fat loss|medical|doctor|healthy|unhealthy|should/i)
+  })
+
+  it('eat back: off leaves the goal alone', async () => {
+    m.api.getDay.mockResolvedValue(dayOf({ health: HEALTH, eatBack: { enabled: false, percent: 50 } }))
+    await mount(<Diary />)
+    expect(text()).toMatch(/\/ 2,?400/)
+    expect(text()).not.toContain('of active calories')
+  })
+
+  it('eat back: on adds the percentage of ACTIVE calories, labelled with exactly what was added, and "left" follows the new goal', async () => {
+    m.api.getDay.mockResolvedValue(dayOf({ health: HEALTH, eatBack: { enabled: true, percent: 50 } }))
+    await mount(<Diary />)
+    expect(text()).toMatch(/\/ 2,?720/)                                   // 2,400 + 50% of 640
+    expect(text()).toMatch(/Goal 2,?400 \+ 320 \(50% of active calories\)/)
+    expect(text()).toMatch(/1,?770/)                                      // 2,720 − 950 left
+  })
+
+  it('eat back is on but this day has no numbers: the normal goal, and a line that says why', async () => {
+    m.api.getDay.mockResolvedValue(dayOf({ health: null, eatBack: { enabled: true, percent: 50 } }))
+    await mount(<Diary />)
+    expect(text()).toMatch(/\/ 2,?400/)
+    expect(text()).toContain('Eat back is on; waiting for Apple Health numbers')
+  })
+
+  it('no goal set: the energy block still shows', async () => {
+    m.api.getDay.mockResolvedValue(dayOf({ goals: null, health: HEALTH }))
+    await mount(<Diary />)
+    expect(text()).toContain('Burned')
+  })
+})
+
+describe('Apple Health screen', () => {
+  const cfgWith = health => m.api.getConfig.mockResolvedValue({ ai: { limit: 30, used: 0, remaining: 30, available: true }, health })
+  const TOKEN = 'ogh_0123456789abcdef_' + 'ab'.repeat(32)
+
+  it('with no token: says so, makes one, shows it ONCE with copy buttons, and the page itself never shows it', async () => {
+    cfgWith({ set: false, createdAt: null, lastUsedAt: null, hint: null, eatBack: { enabled: false, percent: 50 } })
+    await mount(<Health />)
+    expect(text()).toContain('No token yet')
+    m.api.createHealthToken.mockResolvedValue({ token: TOKEN, createdAt: 1, rotated: false, hint: '…cdef' })
+    cfgWith({ set: true, createdAt: Date.now(), lastUsedAt: null, hint: '…cdef', eatBack: { enabled: false, percent: 50 } })
+    await click(byText('button', 'Make a token'))
+    expect(m.api.createHealthToken).toHaveBeenCalledTimes(1)
+    const s = await showSheet()
+    expect(s.el.textContent).toContain('only time it is shown')
+    expect(s.el.querySelector('textarea').value).toBe(TOKEN)
+    await click(byText('button', 'Copy header value (Bearer …)'))
+    expect(m.copy).toHaveBeenLastCalledWith('Bearer ' + TOKEN)
+    await click(byText('button', 'Copy the token only'))
+    expect(m.copy).toHaveBeenLastCalledWith(TOKEN)
+    // After the sheet, the page knows a token exists, by its hint only.
+    const page = host.querySelector('.narrow').textContent          // the page itself, not the sheet the harness appended
+    expect(page).toContain('Token …cdef')
+    expect(page).not.toContain(TOKEN.slice(-20))
+  })
+
+  it('with a token: when it was last used, rotate and revoke each ask first', async () => {
+    cfgWith({ set: true, createdAt: new Date(2026, 9, 1, 9, 0).getTime(), lastUsedAt: new Date(2026, 9, 12, 14, 5).getTime(), hint: '…cdef', eatBack: { enabled: false, percent: 50 } })
+    await mount(<Health />)
+    expect(text()).toContain('Token …cdef')
+    expect(text()).toMatch(/Last used .*14:05/)
+    await click(byText('button', 'Revoke'))
+    expect(m.confirm).toHaveBeenCalledTimes(1)
+    expect(m.api.revokeHealthToken).not.toHaveBeenCalled()
+    m.api.revokeHealthToken.mockResolvedValue({ revoked: true })
+    cfgWith({ set: false, createdAt: null, lastUsedAt: null, hint: null, eatBack: { enabled: false, percent: 50 } })
+    await act(async () => { await m.confirm.mock.calls[0][0].onConfirm() }); await flush()
+    expect(m.api.revokeHealthToken).toHaveBeenCalled()
+    expect(text()).toContain('No token yet')
+
+    cfgWith({ set: true, createdAt: 1, lastUsedAt: null, hint: '…cdef', eatBack: { enabled: false, percent: 50 } })
+    act(() => root.unmount()); root = createRoot(host); m.confirm.mockReset()
+    await mount(<Health />)
+    expect(text()).toContain('Never used yet')
+    await click(byText('button', 'Make a new token'))
+    expect(m.confirm).toHaveBeenCalledTimes(1)
+    expect(m.confirm.mock.calls[0][0].message).toContain('stops working immediately')
+    expect(m.api.createHealthToken).not.toHaveBeenCalled()
+  })
+
+  it('eat back is off by default, switches on with a percentage, and a failed save rolls back', async () => {
+    cfgWith({ set: false, createdAt: null, lastUsedAt: null, hint: null, eatBack: { enabled: false, percent: 50 } })
+    await mount(<Health />)
+    expect(host.querySelector('[role="switch"]').getAttribute('aria-checked')).toBe('false')
+    expect(text()).not.toContain('Share of active calories')
+    m.api.putHealthSettings.mockResolvedValue({ eatBack: { enabled: true, percent: 50 } })
+    await click(host.querySelector('[role="switch"]'))
+    expect(m.api.putHealthSettings).toHaveBeenCalledWith({ enabled: true, percent: 50 })
+    expect(text()).toContain('Share of active calories')
+    expect(text()).toContain('50% of today’s active calories is added to the goal')
+    m.api.putHealthSettings.mockRejectedValue(new Error('offline'))
+    await click(host.querySelector('[role="switch"]'))
+    expect(m.toast).toHaveBeenCalledWith('offline')
+    expect(host.querySelector('[role="switch"]').getAttribute('aria-checked')).toBe('true')       // back to what it was
+  })
+
+  it('the setup section gives the address, the JSON, the steps, the guide link and the honest reliability note', async () => {
+    cfgWith({ set: true, createdAt: 1, lastUsedAt: null, hint: '…cdef', eatBack: { enabled: false, percent: 50 } })
+    await mount(<Health />)
+    expect(text()).toContain(location.origin + '/api/nutrition/health')
+    expect(text()).toContain('"active_kcal": 512')
+    expect(host.querySelectorAll('.nut-steps li').length).toBeGreaterThanOrEqual(6)
+    expect(text()).toContain('Get Contents of URL')
+    const link = host.querySelector('a[href*="NUTRITION_APPLE_HEALTH.md"]')
+    expect(link).toBeTruthy(); expect(link.target).toBe('_blank'); expect(link.rel).toContain('noopener')
+    expect(text()).toMatch(/best effort/)
+    expect(text()).toMatch(/locked/)
+    await click(byText('button', 'Copy'))
+    expect(m.copy).toHaveBeenCalledWith(location.origin + '/api/nutrition/health')
+  })
+
+  it('a server error is shown, not swallowed', async () => {
+    m.api.getConfig.mockRejectedValue(new Error('HTTP 500'))
+    await mount(<Health />)
+    expect(text()).toContain('HTTP 500')
+  })
+
+  it('Goals links to it', async () => {
+    m.api.getGoals.mockResolvedValue({ goals: null })
+    await mount(<Goals />)
+    await click(byText('button', 'Apple Health'))
+    expect(where).toBe('/nutrition/health')
   })
 })
 

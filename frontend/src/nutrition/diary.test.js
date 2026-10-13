@@ -96,3 +96,48 @@ describe('forms', () => {
     expect(macroLine({ protein_g: 24.000001, carbs_g: 3, fat_g: 1.54 })).toBe('P 24 · C 3 · F 1.5')
   })
 })
+
+import { burnedOf, netOf, goalWithEatBack, signed, updatedText } from './diary.js'
+
+describe('Apple Health numbers', () => {
+  const h = { active_kcal: 640.4, resting_kcal: 1670, steps: 8000, updatedAt: 1 }
+  it('burned is active + resting; none without numbers', () => {
+    expect(burnedOf(h)).toBe(2310)
+    expect(burnedOf(null)).toBe(null)
+    expect(burnedOf({ active_kcal: 'x', resting_kcal: 1 })).toBe(null)
+    expect(burnedOf({ active_kcal: 0, resting_kcal: 1500 })).toBe(1500)
+  })
+  it('net is eaten minus burned, and absent when there is nothing to subtract', () => {
+    expect(netOf(1420, h)).toBe(-890)
+    expect(netOf(2500, h)).toBe(190)
+    expect(netOf(2310, h)).toBe(0)
+    expect(netOf(0, h)).toBe(-2310)
+    expect(netOf(1420, null)).toBe(null)
+    expect(netOf(undefined, h)).toBe(-2310)
+  })
+  it('eat-back adds a share of ACTIVE calories to the goal only when switched on', () => {
+    expect(goalWithEatBack(2400, h, { enabled: false, percent: 50 })).toEqual({ goal: 2400, extra: 0, applied: false })
+    expect(goalWithEatBack(2400, h, { enabled: true, percent: 50 })).toEqual({ goal: 2720, extra: 320, applied: true })
+    expect(goalWithEatBack(2400, h, { enabled: true, percent: 100 }).goal).toBe(3040)
+    expect(goalWithEatBack(2400, h, { enabled: true, percent: 0 })).toEqual({ goal: 2400, extra: 0, applied: false })
+    expect(goalWithEatBack(2400, null, { enabled: true, percent: 50 })).toEqual({ goal: 2400, extra: 0, applied: false })
+    expect(goalWithEatBack(null, h, { enabled: true, percent: 50 })).toEqual({ goal: null, extra: 0, applied: false })
+    expect(goalWithEatBack(2400, h, undefined).goal).toBe(2400)
+  })
+  it('resting calories never feed the goal', () => {
+    expect(goalWithEatBack(2000, { active_kcal: 0, resting_kcal: 1800 }, { enabled: true, percent: 100 }).goal).toBe(2000)
+  })
+  it('signed shows a real minus and always a sign', () => {
+    expect(signed(-890)).toBe('−890')
+    expect(signed(190)).toBe('+190')
+    expect(signed(0)).toBe('0')
+    expect(signed(-1234)).toBe('−' + (1234).toLocaleString())
+  })
+  it('updatedText: a time today, a date and time otherwise', () => {
+    const now = new Date(2026, 9, 13, 18, 0).getTime()
+    expect(updatedText(new Date(2026, 9, 13, 14, 5).getTime(), now, 'en-GB')).toBe('14:05')
+    expect(updatedText(new Date(2026, 9, 12, 23, 30).getTime(), now, 'en-GB')).toBe('12 Oct, 23:30')
+    expect(updatedText(NaN, now)).toBe('')
+    expect(updatedText(undefined, now)).toBe('')
+  })
+})

@@ -8,7 +8,7 @@ import { dateLocale } from '../lib/i18n.js'
 import { nt } from './i18n.js'
 import * as nutri from './api.js'
 import { openAddSheet, openEditEntry } from './sheets.jsx'
-import { EMPTY_TOTALS, MACRO_KEYS, MACRO_LABEL, MEALS, MEAL_LABEL, fraction, macroLine, mealForHour, relativeDay, remaining, shiftISO, trim, validISO } from './diary.js'
+import { EMPTY_TOTALS, MACRO_KEYS, MACRO_LABEL, MEALS, MEAL_LABEL, burnedOf, fraction, goalWithEatBack, macroLine, mealForHour, netOf, relativeDay, remaining, shiftISO, signed, trim, updatedText, validISO } from './diary.js'
 import './nutrition.css'
 
 const nf = n => Math.round(n || 0).toLocaleString(dateLocale())
@@ -29,19 +29,39 @@ function dayLabel(date, today) {
   return d.toLocaleDateString(dateLocale(), { weekday: 'short', day: 'numeric', month: 'short', ...(date.slice(0, 4) !== today.slice(0, 4) ? { year: 'numeric' } : {}) })
 }
 
-function Summary({ totals, goals, onGoals }) {
+function Summary({ totals, goals, health, eatBack, onGoals, onHealth }) {
   const g = goals || {}
-  const left = remaining(totals.calories, g.calories)
+  // The calorie goal for THIS day: as set, plus a share of the day's active calories when "eat back" is on.
+  const adj = goalWithEatBack(g.calories, health, eatBack)
+  const left = remaining(totals.calories, adj.goal)
+  const burned = burnedOf(health)
+  const net = netOf(totals.calories, health)
   return <div className="card nut-summary">
     <div className="row between" style={{ alignItems: 'flex-end' }}>
       <div>
         <div className="muted small">{nt('Calories')}</div>
-        <div className="big">{nf(totals.calories)}{g.calories ? <span className="muted nut-of"> / {nf(g.calories)}</span> : <span className="muted nut-of"> kcal</span>}</div>
+        <div className="big">{nf(totals.calories)}{adj.goal ? <span className="muted nut-of"> / {nf(adj.goal)}</span> : <span className="muted nut-of"> kcal</span>}</div>
       </div>
-      {g.calories ? <div className={'nut-left' + (left < 0 ? ' over' : '')}><b>{nf(Math.abs(left))}</b><span>{left < 0 ? nt('over') : nt('left')}</span></div>
+      {adj.goal ? <div className={'nut-left' + (left < 0 ? ' over' : '')}><b>{nf(Math.abs(left))}</b><span>{left < 0 ? nt('over') : nt('left')}</span></div>
         : <Button size="sm" icon="target" onClick={onGoals}>{nt('Set goals')}</Button>}
     </div>
-    {g.calories > 0 && <Bar value={totals.calories} goal={g.calories} />}
+    {adj.goal > 0 && <Bar value={totals.calories} goal={adj.goal} />}
+    {adj.applied && <div className="muted small nut-eat">{nt('Goal {0} + {1} ({2}% of active calories)', nf(g.calories), nf(adj.extra), eatBack.percent)}</div>}
+    {eatBack?.enabled && !health && g.calories > 0 && <div className="muted small nut-eat">{nt('Eat back is on; waiting for Apple Health numbers for this day. Using your normal goal.')}</div>}
+
+    {health ? <div className="nut-energy">
+      <div className="nut-energy-grid">
+        <div><span className="muted small">{nt('Eaten')}</span><b>{nf(totals.calories)}</b></div>
+        <div><span className="muted small">{nt('Burned')}</span><b>{nf(burned)}</b></div>
+        <div><span className="muted small">{nt('Net')}</span><b>{signed(net)}</b></div>
+      </div>
+      <div className="muted small nut-energy-sub">
+        {nt('Active {0} + resting {1}', nf(health.active_kcal), nf(health.resting_kcal))}{health.steps != null ? ' · ' + nt('{0} steps', nf(health.steps)) : ''} · {nt('Net is eaten − burned.')} {nt('Updated {0}', updatedText(health.updatedAt, Date.now(), dateLocale()))}
+      </div>
+    </div> : <button className="nut-energy-hint" onClick={onHealth}>
+      <Icon name="heart" /><span>{nt('No Apple Health numbers for this day. Set it up')}</span><Icon name="chevronRight" />
+    </button>}
+
     <div className="nut-macros">
       {MACRO_KEYS.map(k => <div key={k} className="nut-macro">
         <div className="row between small"><span className="muted">{nt(MACRO_LABEL[k])}</span><span><b>{trim(totals[k])}</b>{g[k] ? <span className="muted"> / {trim(g[k])} g</span> : <span className="muted"> g</span>}</span></div>
@@ -119,7 +139,7 @@ export default function Diary() {
     {status === 'loading' && !day && <div className="card"><div className="muted small">{nt('Loading…')}</div></div>}
 
     {day && status !== 'off' && <>
-      <Summary totals={day.totals || EMPTY_TOTALS} goals={day.goals} onGoals={() => nav('/nutrition/goals')} />
+      <Summary totals={day.totals || EMPTY_TOTALS} goals={day.goals} health={day.health} eatBack={day.eatBack} onGoals={() => nav('/nutrition/goals')} onHealth={() => nav('/nutrition/health')} />
       {status === 'error' && <div className="small" style={{ color: 'var(--red)', margin: '0 4px 10px' }}>{nt('Could not refresh: {0}', state.error)} <button className="linkbtn" onClick={load}>{nt('Try again')}</button></div>}
       {MEALS.map(m => <MealCard key={m} meal={m} entries={byMeal(m)} totals={day.byMeal?.[m] || EMPTY_TOTALS}
         onAdd={() => openAddSheet({ date, meal: m, onSaved: load })}

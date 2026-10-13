@@ -2577,7 +2577,7 @@ const routes = {
   // them: they are closures over db and SECRET, and passing them in keeps that module free of
   // a cycle. Every one of them is inert while the feature is unconfigured.
   ...coachRoutes({ json, readBody, readSession, requireAdmin }),
-  ...nutritionRoutes({ json, readBody, readSession, requireAdmin }),
+  ...nutritionRoutes({ json, readBody, readSession, requireAdmin, limitAddress, userActive: uid => db.users.some(u => u.id === uid && !u.disabled) }),
 
   /* ---------- photos & videos ---------- */
   // Absent, not refusing, when MEDIA_UPLOADS=0: a 404 is what a server from before the feature

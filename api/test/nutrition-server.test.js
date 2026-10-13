@@ -221,3 +221,89 @@ test('AI logging through the real server: guarded, validated, and honest when th
   assert.equal(big.status, 413);
   assert.equal(h.log.split('\n').filter(l => /^\s+at /.test(l)).length, 0);
 });
+
+/* ------------------------------ Apple Health, through the real server ------------------------------ */
+
+test('Apple Health through the real server: a Shortcut-style request (Bearer only, no cookie, no Origin) works; the token works nowhere else', async t => {
+  // Locked down the way the owner runs it: invite-only sign-up, guest mode off.
+  const h = await boot(t, { INVITE_ONLY: '1', ALLOW_GUEST: '0' });
+  const day = new Date().toISOString().slice(0, 10);
+
+  const made = await h.call('POST', '/api/nutrition/health/token', USER);
+  assert.equal(made.status, 201, h.log);
+  const token = made.body.token;
+  assert.match(token, /^ogh_[0-9a-f]{16}_[0-9a-f]{64}$/);
+
+  // Exactly what the Shortcut sends: no cookie, no Origin, Cloudflare-ish headers, a Bearer token.
+  const post = (body, bearer = token, extra = {}) => fetch(h.api + '/api/nutrition/health', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + bearer, 'User-Agent': 'Shortcuts/1.0', 'CF-Connecting-IP': '203.0.113.5', ...extra }, body: JSON.stringify(body)
+  }).then(async r => ({ status: r.status, body: await r.json().catch(() => null), headers: r.headers }));
+  const ok = await post({ date: day, active_kcal: 512, resting_kcal: 1650, steps: 8000 });
+  assert.equal(ok.status, 200, h.log);
+  assert.deepEqual([ok.body.ok, ok.body.burned_kcal, ok.body.replaced], [true, 2162, false]);
+  assert.equal(ok.headers.get('cache-control'), 'no-store');
+  assert.equal((await post({ date: day, active_kcal: 600, resting_kcal: 1650 })).body.replaced, true);
+
+  // The profile sees them in the diary; another profile does not.
+  const mine = await h.call('GET', `/api/nutrition/day?date=${day}`, USER);
+  assert.deepEqual([mine.body.health.active_kcal, mine.body.health.burned_kcal], [600, 2250]);
+  assert.equal((await h.call('GET', `/api/nutrition/day?date=${day}`, OTHER)).body.health, null);
+  assert.ok(fs.existsSync(path.join(h.dataDir, 'nutrition', `${USER}.json`)));
+
+  // Bad input is a clear 400, not a crash.
+  const bad = await post({ date: day, active_kcal: '512', resting_kcal: 1650 });
+  assert.deepEqual([bad.status, bad.body.field], [400, 'active_kcal']);
+  const raw = await fetch(h.api + '/api/nutrition/health', { method: 'POST', headers: { Authorization: 'Bearer ' + token }, body: '{nope' });
+  assert.equal(raw.status, 400);
+  assert.equal((await fetch(h.api + '/api/nutrition/health', { method: 'POST', headers: { Authorization: 'Bearer ' + token }, body: JSON.stringify({ x: 'y'.repeat(6 * 1024 * 1024) }) })).status, 413, 'the body limit applies');
+
+  // THE TOKEN IS ACCEPTED NOWHERE ELSE: as a Bearer on any other route it is just "not signed in".
+  const elsewhere = [
+    ['GET', `/api/nutrition/day?date=${day}`], ['GET', '/api/nutrition/config'], ['GET', '/api/nutrition/goals'], ['GET', '/api/nutrition/foods'],
+    ['GET', '/api/nutrition/health/token'], ['POST', '/api/nutrition/health/token'], ['DELETE', '/api/nutrition/health/token'],
+    ['PUT', '/api/nutrition/health/settings'], ['POST', '/api/nutrition/entries'], ['POST', '/api/nutrition/analyze'],
+    ['GET', '/api/data'], ['GET', '/api/me'], ['GET', '/api/admin/nutrition'], ['PUT', '/api/nutrition/goals']
+  ];
+  for (const [method, p] of elsewhere) {
+    const r = await fetch(h.api + p, { method, headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, body: method === 'GET' ? undefined : '{}' });
+    assert.ok([401].includes(r.status) || (p === '/api/me' && r.status === 200), `${method} ${p} -> ${r.status}`);
+    if (p === '/api/me') assert.equal((await r.json()).user ?? null, null, 'not signed in');
+  }
+  // …and the diary is untouched by all of that.
+  assert.equal((await h.call('GET', `/api/nutrition/day?date=${day}`, USER)).body.entries.length, 0);
+
+  // Wrong tokens: 401, then the address is locked.
+  const wrong = 'ogh_' + 'a'.repeat(16) + '_' + 'b'.repeat(64);
+  const codes = [];
+  for (let i = 0; i < 12; i++) codes.push((await post({ date: day, active_kcal: 1, resting_kcal: 1 }, wrong)).status);
+  assert.equal(codes[0], 401);
+  assert.equal(codes.at(-1), 429);
+  assert.equal(h.log.split('\n').filter(l => /^\s+at /.test(l)).length, 0, 'no stack traces');
+  assert.ok(!h.log.includes(token) && !h.log.includes(token.split('_')[2]), 'the token is never logged');
+});
+
+test('Apple Health: revoking, rotating, and deleting the profile each kill the token', async t => {
+  const h = await boot(t);
+  const day = new Date().toISOString().slice(0, 10);
+  const body = { date: day, active_kcal: 1, resting_kcal: 1 };
+  const send = tok => fetch(h.api + '/api/nutrition/health', { method: 'POST', headers: { Authorization: 'Bearer ' + tok }, body: JSON.stringify(body) }).then(r => r.status);
+
+  const t1 = (await h.call('POST', '/api/nutrition/health/token', USER)).body.token;
+  assert.equal(await send(t1), 200);
+  const t2 = (await h.call('POST', '/api/nutrition/health/token', USER)).body.token;
+  assert.equal(await send(t1), 401, 'rotated away');
+  assert.equal(await send(t2), 200);
+  await h.call('DELETE', '/api/nutrition/health/token', USER);
+  assert.equal(await send(t2), 401, 'revoked');
+
+  const t3 = (await h.call('POST', '/api/nutrition/health/token', OTHER)).body.token;
+  assert.equal(await send(t3), 200);
+  assert.equal((await h.call('POST', '/api/admin/user/disable', ADMIN, { id: OTHER, disabled: true })).status, 200);
+  assert.equal(await send(t3), 401, 'a disabled profile’s token is dead');
+
+  const t4 = (await h.call('POST', '/api/nutrition/health/token', USER)).body.token;
+  assert.equal(await send(t4), 200);
+  assert.equal((await h.call('POST', '/api/admin/user/delete', ADMIN, { id: USER })).status, 200);
+  assert.equal(await send(t4), 401, 'a deleted profile’s token is dead');
+  assert.ok(!fs.existsSync(path.join(h.dataDir, 'nutrition', `${USER}.json`)), 'and the ingest did not bring its file back');
+});

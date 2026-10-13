@@ -32,7 +32,7 @@ const fileFor = uid => {
   if (!s) throw new Error('no user id');
   return path.join(dataDir(), s + '.json');
 };
-const EMPTY = () => ({ v: 1, goals: null, foods: {}, days: {}, ai: null, coachShare: false });
+const EMPTY = () => ({ v: 1, goals: null, foods: {}, days: {}, ai: null, coachShare: false, health: null });
 const newId = () => crypto.randomBytes(9).toString('base64url');
 const todayUTC = () => new Date().toISOString().slice(0, 10);
 
@@ -93,11 +93,24 @@ export function totalsOf(entries) {
   return t;
 }
 
+/* Apple Health numbers a Shortcut posted (health.js writes them). Read-side helpers live here so
+   dayView can include them without a cycle. */
+export const EAT_BACK_DEFAULT = Object.freeze({ enabled: false, percent: 50 });
+export function eatBackOf(d) {
+  const e = d.health?.eatBack;
+  return { enabled: e?.enabled === true, percent: Number.isInteger(e?.percent) && e.percent >= 0 && e.percent <= 100 ? e.percent : EAT_BACK_DEFAULT.percent };
+}
+export function healthDay(d, date) {
+  const h = d.health?.days?.[date];
+  if (!h) return null;
+  return { active_kcal: h.active, resting_kcal: h.resting, steps: h.steps ?? null, burned_kcal: round(h.active + h.resting, 1), updatedAt: h.updatedAt };
+}
+
 export function dayView(d, date) {
   const entries = d.days[date]?.entries || [];
   const byMeal = {};
   for (const m of ['breakfast', 'lunch', 'dinner', 'snack']) byMeal[m] = totalsOf(entries.filter(e => e.meal === m));
-  return { date, entries, totals: totalsOf(entries), byMeal, goals: d.goals };
+  return { date, entries, totals: totalsOf(entries), byMeal, goals: d.goals, health: healthDay(d, date), eatBack: eatBackOf(d) };
 }
 
 /** Days with at least one entry in [from, to], oldest first. */

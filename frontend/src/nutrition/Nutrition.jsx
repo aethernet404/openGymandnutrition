@@ -4,6 +4,7 @@ import { useStore } from '../store/useStore.js'
 import Diary from './Diary.jsx'
 import Foods from './Foods.jsx'
 import Goals from './Goals.jsx'
+import Health from './Health.jsx'
 
 export default function Nutrition() {
   const user = useStore(s => s.user)
@@ -13,6 +14,7 @@ export default function Nutrition() {
     <Route index element={<Diary />} />
     <Route path="foods" element={<Foods />} />
     <Route path="goals" element={<Goals />} />
+    <Route path="health" element={<Health />} />
     <Route path="*" element={<Navigate to="/nutrition" replace />} />
   </Routes>
 }

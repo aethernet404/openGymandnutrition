@@ -127,3 +127,18 @@
 .nut-spinner.sm{width:16px;height:16px;border-width:2px;flex:none}
 .nut-nothing{margin:14px 2px;display:flex;flex-direction:column;gap:6px}
 .nut-ways{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px;align-items:center}
+
+/* ---- Apple Health ---- */
+.nut-eat{margin-top:6px}
+.nut-energy{margin-top:16px;padding-top:14px;border-top:.5px solid var(--surface-3)}
+.nut-energy-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.nut-energy-grid>div{display:flex;flex-direction:column;gap:2px}
+.nut-energy-grid b{font-size:20px;font-weight:600;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.nut-energy-sub{margin-top:8px}
+.nut-energy-hint{display:flex;align-items:center;gap:8px;margin-top:14px;padding:10px 12px;border-radius:10px;background:var(--surface-2);color:var(--label-2);font-size:13px;text-align:start;width:100%}
+.nut-energy-hint span{flex:1}
+.nut-token{width:100%;margin-top:10px;padding:10px;border-radius:10px;background:var(--surface-2);color:var(--label);border:0;font:13px/1.35 ui-monospace,SFMono-Regular,Menlo,monospace;word-break:break-all;resize:none}
+.nut-code{flex:1;min-width:0;font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;word-break:break-all;background:var(--surface-2);padding:8px 10px;border-radius:8px}
+.nut-code.block{margin:0;white-space:pre;overflow:auto}
+.nut-steps{margin:6px 16px 12px 36px;padding:0;font-size:14px;line-height:1.45;color:var(--label-2)}
+.nut-steps li{margin:6px 0}

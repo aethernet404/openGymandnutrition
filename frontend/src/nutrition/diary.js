@@ -109,3 +109,39 @@ export function goalsBody(g) {
   for (const k of ['calories', ...MACRO_KEYS]) if (g[k] != null && !(Number.isFinite(g[k]) && g[k] >= 0)) return { ok: false, error: `${MACRO_LABEL[k]} must be a number from 0 up` }
   return { ok: true, body: { calories: g.calories || null, protein_g: g.protein_g || null, carbs_g: g.carbs_g || null, fat_g: g.fat_g || null } }
 }
+
+/* ---------- Apple Health: burned, net, and the optional "eat back" ---------- */
+
+/** Active + resting energy for a day (kcal, whole), or null when no numbers came in. */
+export const burnedOf = h => (h && Number.isFinite(h.active_kcal) && Number.isFinite(h.resting_kcal) ? Math.round(h.active_kcal + h.resting_kcal) : null)
+
+/** Eaten minus burned. Negative means more went out than came in. null without Health numbers. */
+export function netOf(eaten, h) {
+  const burned = burnedOf(h)
+  return burned == null ? null : Math.round(eaten || 0) - burned
+}
+
+/**
+ * The calorie goal for a day, with "eat back" applied when the person turned it on: their goal plus
+ * a percentage of the day's ACTIVE calories (not resting). Off, or no Health numbers for the day,
+ * leaves the goal exactly as set.
+ * @returns {{ goal:number|null, extra:number, applied:boolean }}
+ */
+export function goalWithEatBack(goal, h, eatBack) {
+  if (!(goal > 0)) return { goal: null, extra: 0, applied: false }
+  if (!eatBack?.enabled || !h || !Number.isFinite(h.active_kcal)) return { goal, extra: 0, applied: false }
+  const extra = Math.round(h.active_kcal * (eatBack.percent ?? 0) / 100)
+  return { goal: goal + extra, extra, applied: extra > 0 }
+}
+
+/** "+120" / "−890" / "0": the sign is always shown, with a real minus. */
+export const signed = n => (n > 0 ? '+' : n < 0 ? '−' : '') + Math.abs(n).toLocaleString()
+
+/** When the numbers last arrived: a time for today, a date and time otherwise. */
+export function updatedText(ts, now = Date.now(), locale) {
+  if (!Number.isFinite(ts)) return ''
+  const t = new Date(ts)
+  const same = new Date(now).toDateString() === t.toDateString()
+  const time = t.toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' })
+  return same ? time : t.toLocaleDateString(locale, { day: 'numeric', month: 'short' }) + ', ' + time
+}

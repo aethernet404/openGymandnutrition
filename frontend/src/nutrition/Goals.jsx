@@ -124,6 +124,7 @@ export default function Goals() {
       <div style={{ height: 14 }} />
       <Button variant="primary" onClick={save} disabled={busy}>{nt('Save goals')}</Button>
     </div>}
+    {g && <Section><Row icon="heart" iconTint="var(--red)" title={nt('Apple Health')} subtitle={nt('Calories burned, from an iOS Shortcut')} accessory="chevron" onClick={() => nav('/nutrition/health')} /></Section>}
     {g && <CoachShare />}
     {user?.admin && <Admin />}
     {user?.admin && <UsdaKey />}
