@@ -95,7 +95,7 @@ function WeightCard({ weight, unit, onSetup }) {
   return <div className="card nut-weight">
     <div className="row between">
       <div><div className="muted small">{nt('Weight')}</div><b className="nut-weight-v">{weightText(weight.latest.kg, unit)}</b></div>
-      {path ? <div className="center"><svg viewBox="0 0 120 32" width="120" height="32" role="img" aria-label={nt('Weight, last 30 days')}><path d={path} fill="none" stroke="var(--blue)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
+      {path ? <div className="nut-center"><svg viewBox="0 0 120 32" width="120" height="32" role="img" aria-label={nt('Weight, last 30 days')}><path d={path} fill="none" stroke="var(--blue)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
         {change != null && <div className="muted small">{nt('{0} in 30 days', (change > 0 ? '+' : change < 0 ? '−' : '') + Math.abs(change) + ' ' + unit)}</div>}</div>
         : <span className="dim small">{nt('A line appears with two readings')}</span>}
     </div>
@@ -186,7 +186,7 @@ export default function Diary() {
       {MEALS.map(m => <MealCard key={m} meal={m} entries={byMeal(m)} totals={day.byMeal?.[m] || EMPTY_TOTALS}
         onAdd={() => openAddSheet({ date, meal: m, onSaved: load })}
         onEdit={e => openEditEntry({ entry: e, date, onSaved: load })} />)}
-      {!day.entries.length && <div className="center muted small" style={{ margin: '6px 0 14px' }}>
+      {!day.entries.length && <div className="nut-center muted small" style={{ margin: '6px 0 14px' }}>
         <Button variant="primary" icon="plus" onClick={() => openAddSheet({ date, meal: defaultMeal, onSaved: load })}>{nt('Log your first food')}</Button>
       </div>}
     </>}

@@ -120,7 +120,7 @@ export default function AppleHealth() {
         {h.weight?.latest ? <>
           <div className="row between" style={{ gap: 12 }}>
             <b className="nut-weight-v">{weightText(h.weight.latest.kg, unit)}</b>
-            {wpath ? <div className="center"><svg viewBox="0 0 120 32" width="120" height="32" role="img" aria-label={nt('Weight, last 30 days')}><path d={wpath} fill="none" stroke="var(--blue)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
+            {wpath ? <div className="nut-center"><svg viewBox="0 0 120 32" width="120" height="32" role="img" aria-label={nt('Weight, last 30 days')}><path d={wpath} fill="none" stroke="var(--blue)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
               {wt.change != null && <div className="muted small">{nt('{0} in 30 days', (wt.change > 0 ? '+' : wt.change < 0 ? '−' : '') + Math.abs(wt.change) + ' ' + unit)}</div>}</div>
               : <span className="dim small">{nt('A line appears with two readings')}</span>}
           </div>

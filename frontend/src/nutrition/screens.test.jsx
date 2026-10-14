@@ -1513,3 +1513,79 @@ describe('Apple Health stats page', () => {
     expect(text()).toContain('Recent workouts')
   })
 })
+
+describe('the weight trend stays in the page flow', () => {
+  const READINGS = { latest: { date: '2026-10-12', kg: 80 }, readings: [{ date: '2026-09-20', kg: 82 }, { date: '2026-10-12', kg: 80 }], count: 2 }
+  const flowing = () => {
+    expect(host.querySelector('.center'), 'the global dialog class is not used').toBeNull()
+    expect(host.querySelector('[role="dialog"],[aria-modal],dialog')).toBeNull()
+    expect(m.sheets.length, 'nothing opened a sheet').toBe(0)
+    for (const el of host.querySelectorAll('.nut-weight, .nut-weight *')) {
+      expect(['absolute', 'fixed'], el.className.toString()).not.toContain(el.style.position)
+      expect(el.style.zIndex).toBe('')
+    }
+  }
+
+  it('Diary: with two or more readings the trend is a child of the Weight card, below the summary, and nothing pops up', async () => {
+    m.api.getWeight.mockResolvedValue(READINGS)
+    m.api.getDay.mockResolvedValue(dayOf({ health: HEALTH, activity: { exercise_min: 11, workouts: [{ name: 'Other', time: '06:19', duration_min: 53, kcal: 374, km: null }], updatedAt: 1 } }))
+    await mount(<Diary />)
+    flowing()
+    const card = host.querySelector('.nut-weight')
+    expect(card.querySelector('svg path')).toBeTruthy()
+    expect(card.querySelector('.nut-center svg')).toBeTruthy()
+    const summary = [...host.querySelectorAll('.card')].find(c => c.textContent.includes('Burned'))
+    expect(summary.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()      // after the summary in the page
+    expect(summary.contains(card)).toBe(false)
+    expect(card.contains(summary)).toBe(false)
+  })
+
+  it('a new weight arriving (one reading becomes two) opens nothing by itself', async () => {
+    m.api.getWeight.mockResolvedValue({ latest: { date: '2026-10-12', kg: 80 }, readings: [{ date: '2026-10-12', kg: 80 }], count: 1 })
+    await mount(<Diary />)
+    flowing()
+    expect(text()).toContain('A line appears with two readings')
+    act(() => root.unmount()); root = createRoot(host)
+    m.api.getWeight.mockResolvedValue(READINGS)
+    await mount(<Diary />)
+    flowing()
+    expect(text()).toMatch(/−2 kg in 30 days/)
+    expect(host.querySelectorAll('.nut-weight .nut-center').length).toBe(1)
+  })
+
+  it('an empty day’s "Log your first food" prompt is in the flow too', async () => {
+    m.api.getDay.mockResolvedValue(dayOf({ entries: [], totals: { calories: 0, protein_g: 0, carbs_g: 0, fat_g: 0 }, byMeal: {} }))
+    await mount(<Diary />)
+    expect(text()).toContain('Log your first food')
+    expect(host.querySelector('.center')).toBeNull()
+    expect(byText('button', 'Log your first food').closest('.nut-center')).toBeTruthy()
+  })
+
+  it('the stats page: the weight card and its line are in the flow, in lb and in kg', async () => {
+    m.api.getHealthHistory.mockResolvedValue(fullHistory())
+    await mount(<AppleHealth />)
+    flowing()
+    expect(text()).toContain('80 kg'); expect(text()).toMatch(/−2 kg in 30 days/)
+    act(() => root.unmount()); root = createRoot(host); m.unit = 'lb'
+    await mount(<AppleHealth />)
+    flowing()
+    expect(text()).toContain('176.4 lb'); expect(text()).toMatch(/−4\.4 lb in 30 days/)
+  })
+
+  it('the Home card has no overlay of its own, in lb and in kg', async () => {
+    m.api.getHealthHistory.mockResolvedValue(fullHistory())
+    await mount(<HealthHomeCard />)
+    flowing(); expect(text()).toContain('80 kg')
+    act(() => root.unmount()); root = createRoot(host); m.unit = 'lb'
+    await mount(<HealthHomeCard />)
+    flowing(); expect(text()).toContain('176.4 lb')
+  })
+
+  it('the chart’s tap-a-bar readout is plain text in the chart card: no popup, nothing to close', async () => {
+    m.api.getHealthHistory.mockResolvedValue(fullHistory())
+    await mount(<AppleHealth />)
+    await click(host.querySelectorAll('.nut-bars')[0].querySelectorAll('.nut-bar-col')[6])
+    expect(host.querySelector('.nut-chart-read').closest('.card')).toBeTruthy()
+    flowing()
+  })
+})
