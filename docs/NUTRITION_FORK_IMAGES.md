@@ -17,7 +17,7 @@ workflow*, once the file is on the default branch). Each image is built once, st
 then pushed. The check on the api image: the nutrition module and the Coach SDK are present, it boots on an
 empty volume, `/api/health` and `/api/config` answer, and the nutrition routes (including
 `/api/nutrition/health/hae`) answer 401, not 404. On the web image: this commit's frontend is in the bundle
-(the Apple Health history and Health Auto Export paths), and nginx serves the app and a deep link.
+(the Apple Health history and Health Auto Export paths), and nginx serves the app, its JS bundle, and redirects an unknown path to the root (the app routes in the browser).
 
 ## Steps on GitHub (once)
 

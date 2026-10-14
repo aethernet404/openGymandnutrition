@@ -202,16 +202,61 @@ jobs:
         env:
           IMG: ${{ steps.meta.outputs.image }}
         run: |
-          set -euo pipefail
-          # It is this commit's frontend (the Apple Health stats page and the Health Auto Export screens are in the bundle).
-          docker run --rm --entrypoint sh "$IMG" -c 'grep -rlq "nutrition/health/history" /usr/share/nginx/html/assets'
-          docker run --rm --entrypoint sh "$IMG" -c 'grep -rlq "nutrition/health/hae" /usr/share/nginx/html/assets'
-          # nginx starts and serves the app (the api image is smoke-tested in its own job).
-          docker run -d --name web -p 8080:8080 -e NGINX_PORT=8080 "$IMG"
-          for i in $(seq 1 40); do curl -fsS http://127.0.0.1:8080/ >/dev/null 2>&1 && break; sleep 1; done
-          curl -fsS http://127.0.0.1:8080/ | grep -qi '<div id="root"' || { docker logs web; exit 1; }
-          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/nutrition/health)" = 200   # a deep link serves the app
-          docker rm -f web
+          set -uo pipefail
+          BASE=http://127.0.0.1:8080
+          trap 'docker rm -f web >/dev/null 2>&1 || true' EXIT
+
+          # Everything a failing check needs to be understood from the log alone.
+          diag() {
+            echo "::group::diagnostics"
+            echo "--- docker ps -a"; docker ps -a --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' 2>&1
+            echo "--- docker logs web (nginx writes its error and access log here)"; docker logs web 2>&1 | tail -n 100
+            echo "--- curl -i $BASE/"; curl -sS -i --max-time 10 "$BASE/" 2>&1 | head -n 40
+            echo "--- nginx -T (the rendered config)"; docker exec web nginx -T 2>&1 | head -n 150
+            echo "::endgroup::"
+          }
+          # check "what it looks for" command...   (prints PASS or FAIL; on FAIL prints diagnostics and stops)
+          check() {
+            local label="$1"; shift
+            echo "CHECK  ${label}"
+            local out
+            if out="$("$@" 2>&1)"; then
+              echo "PASS   ${label}${out:+  ($(echo "$out" | head -n 1))}"
+            else
+              echo "FAIL   ${label}"; echo "${out}" | head -n 40; diag; exit 1
+            fi
+          }
+
+          in_bundle() { # a string the minified bundle must contain; prints the file that has it
+            local f; f="$(docker run --rm --entrypoint sh "$IMG" -c "grep -rl '$1' /usr/share/nginx/html/assets | head -n 1")"
+            test -n "$f" && echo "$f"
+          }
+          start() { docker run -d --name web -p 8080:8080 -e NGINX_PORT=8080 "$IMG"; }
+          wait_up() { for i in $(seq 1 60); do curl -sS -o /dev/null --max-time 3 "$BASE/" 2>/dev/null && { echo "answered after ${i}s"; return 0; }; sleep 1; done; echo "no answer from $BASE/ in 60s"; return 1; }
+          status_of() { curl -sS -o /tmp/body.out -w '%{http_code}' --max-time 10 "$1"; }     # body goes to /tmp/body.out, never a pipe
+          index_ok() { local c; c="$(status_of "$BASE/")"; test "$c" = 200 || { echo "GET / -> HTTP $c, expected 200"; return 1; }; grep -qi 'id="root"' /tmp/body.out || { echo 'GET / is 200 but has no id="root"'; head -c 600 /tmp/body.out; return 1; }; echo "HTTP 200, app shell present"; }
+          # The app is a client-side router and nginx does not serve index.html for other paths: an unknown
+          # path is redirected to the root (location @root), which then serves the app.
+          redirects_home() {
+            local c loc; c="$(curl -sS -o /dev/null -w '%{http_code} %{redirect_url}' --max-time 10 "$BASE/nutrition/health")"
+            echo "GET /nutrition/health -> $c"
+            case "$c" in "302 "*) ;; *) return 1 ;; esac
+            test "$(curl -sS -L -o /dev/null -w '%{http_code}' --max-time 10 "$BASE/nutrition/health")" = 200
+          }
+          js_asset_ok() {
+            local p c; p="$(grep -o '/assets/index-[A-Za-z0-9_-]*\.js' /tmp/body.out | head -n 1)"
+            test -n "$p" || { echo "index.html names no /assets/index-*.js"; return 1; }
+            c="$(status_of "$BASE$p")"; test "$c" = 200 || { echo "GET $p -> HTTP $c"; return 1; }; echo "$p"
+          }
+
+          check "bundle contains the Apple Health history path (nutrition/health/history)" in_bundle 'nutrition/health/history'
+          check "bundle contains the Health Auto Export path (nutrition/health/hae)" in_bundle 'nutrition/health/hae'
+          check "container starts" start
+          check "nginx answers within 60 s" wait_up
+          check "GET / is 200 and serves the app shell (id=root)" index_ok
+          check "the main JS bundle named by index.html is served" js_asset_ok
+          check "an unknown path (/nutrition/health) redirects to / and that serves the app" redirects_home
+          echo "All web smoke checks passed."
 
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
