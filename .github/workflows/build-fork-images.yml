@@ -1,0 +1,261 @@
+# Builds this fork's two images on GitHub's runners, so nothing has to be built on the home server, and
+# pushes them to ghcr.io under names that cannot be confused with upstream's:
+#
+#   ghcr.io/<owner>/opengym-api-coach-fork:nutrition-<7-char commit>   (api/Dockerfile, --target coach)
+#   ghcr.io/<owner>/opengym-web-fork:nutrition-<7-char commit>         (web/Dockerfile, context = repo root)
+#
+# linux/amd64 only. No floating tag: there is no `latest` and no `edge`, only the commit-pinned tag, so what
+# runs on the server is always exactly what a given run built. Each image is built once, smoke-tested as the
+# very image that will be pushed, and only then pushed; the run summary lists the names and digests.
+#
+# Runs on every push to the nutrition branch that touches the app, and by hand from the Actions tab.
+# (GitHub shows the "Run workflow" button only for workflow files on the default branch; a push to this
+# branch always runs it.)
+name: Build fork images
+
+on:
+  push:
+    branches: [claude/opengym-nutrition-tracker-7x1675]
+    paths:
+      - 'api/**'
+      - 'frontend/**'
+      - 'web/**'
+      - 'catalogue/**'
+      - 'scripts/**'
+      - '.github/workflows/build-fork-images.yml'
+  workflow_dispatch:
+
+# Nothing is writable unless a job asks for it.
+permissions:
+  contents: read
+
+# A newer push replaces a build that is still running for the same branch.
+concurrency:
+  group: build-fork-images-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PLATFORM: linux/amd64
+
+jobs:
+  api:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      # Pinned to commit SHAs (the comment is the release they are). Dependabot-style bumps are a
+      # deliberate change to this file, never a tag that moves underneath it.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - id: meta
+        run: |
+          owner="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
+          sha7="${GITHUB_SHA::7}"
+          echo "tag=nutrition-${sha7}" >> "$GITHUB_OUTPUT"
+          echo "sha7=${sha7}" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/${owner}/opengym-api-coach-fork:nutrition-${sha7}" >> "$GITHUB_OUTPUT"
+          echo "date=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_OUTPUT"
+
+      # The `docker` driver builds inside the runner's own Docker daemon, so what is built is also what `docker run`,
+      # the relabel step and `docker push` see. (The default container driver keeps its images to itself.)
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          driver: docker
+
+      # Built into the local Docker image store (load) so it can be started and tested before anything is pushed.
+      - name: Build api (target coach)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ./api
+          file: ./api/Dockerfile
+          target: coach
+          platforms: ${{ env.PLATFORM }}
+          load: true
+          push: false
+          provenance: false
+          tags: build/api:candidate
+          build-args: |
+            VERSION=${{ steps.meta.outputs.tag }}
+            VCS_REF=${{ github.sha }}
+            BUILD_DATE=${{ steps.meta.outputs.date }}
+
+      # Dockerfile labels point at upstream's GitLab. A label naming THIS repository is what lets this
+      # workflow keep pushing to the package later (ghcr links a package to the repo it names), so the final
+      # tag is a no-data relabel of the tested image: same layers, same content, one more LABEL.
+      - name: Label the image with this repository
+        run: |
+          printf 'FROM build/api:candidate\nLABEL org.opencontainers.image.source="%s" org.opencontainers.image.revision="%s" org.opencontainers.image.title="opengym-api-coach-fork" org.opencontainers.image.description="openGym api, coach target, nutrition fork"\n' \
+            "${{ github.server_url }}/${{ github.repository }}" "${{ github.sha }}" | docker build -t "${{ steps.meta.outputs.image }}" -
+
+      - name: Smoke test the image that will be pushed
+        env:
+          IMG: ${{ steps.meta.outputs.image }}
+        run: |
+          set -euo pipefail
+          # The nutrition module and the Coach are in the image, not just in the repository.
+          docker run --rm "$IMG" test -f /app/nutrition/routes.js
+          docker run --rm "$IMG" test -f /app/nutrition/hae.js
+          docker run --rm "$IMG" node --input-type=module -e '
+            const { adapterFor } = await import("./coach/adapters/index.js");
+            const r = await adapterFor("claude").check();
+            if (!r.ok) { console.error(r.error); process.exit(1); }
+            console.log("agent sdk", r.version);'
+          docker run --rm "$IMG" id coach
+          # It boots and serves. A fresh volume, so this also proves it can create its own data files.
+          docker run -d --name api-smoke -e DATA_DIR=/data -p 3000:3000 "$IMG"
+          for i in $(seq 1 40); do curl -fsS http://127.0.0.1:3000/api/health >/dev/null 2>&1 && break; sleep 1; done
+          curl -fsS http://127.0.0.1:3000/api/health
+          curl -fsS http://127.0.0.1:3000/api/config | grep -q '"invite_only"'
+          # The nutrition routes are wired and guarded: 401 (needs a session), not 404 (route missing).
+          for p in nutrition/config nutrition/health/history nutrition/weight; do
+            code="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:3000/api/$p")"
+            test "$code" = 401 || { echo "GET /api/$p -> $code, expected 401"; docker logs api-smoke; exit 1; }
+          done
+          code="$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d '{}' http://127.0.0.1:3000/api/nutrition/health/hae)"
+          test "$code" = 401 || { echo "POST /api/nutrition/health/hae -> $code, expected 401"; docker logs api-smoke; exit 1; }
+          docker rm -f api-smoke
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push
+        id: push
+        env:
+          IMG: ${{ steps.meta.outputs.image }}
+        run: |
+          set -euo pipefail
+          docker push "$IMG"
+          digest="$(docker inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$IMG" | grep -F "${IMG%%:*}@" | head -n1 | sed 's/.*@//')"
+          test -n "$digest"
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+          {
+            echo "### api image"
+            echo ""
+            echo "- name: \`${IMG}\`"
+            echo "- digest: \`${digest}\`"
+            echo "- pull by digest: \`${IMG%%:*}@${digest}\`"
+            echo "- commit: \`${GITHUB_SHA}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - id: meta
+        run: |
+          owner="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
+          sha7="${GITHUB_SHA::7}"
+          echo "tag=nutrition-${sha7}" >> "$GITHUB_OUTPUT"
+          echo "sha7=${sha7}" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/${owner}/opengym-web-fork:nutrition-${sha7}" >> "$GITHUB_OUTPUT"
+          echo "date=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_OUTPUT"
+
+      # The `docker` driver builds inside the runner's own Docker daemon, so what is built is also what `docker run`,
+      # the relabel step and `docker push` see. (The default container driver keeps its images to itself.)
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          driver: docker
+
+      # Context is the repository root: the Dockerfile copies frontend/, api/coach/core/ and catalogue/media/.
+      - name: Build web
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: ./web/Dockerfile
+          platforms: ${{ env.PLATFORM }}
+          load: true
+          push: false
+          provenance: false
+          tags: build/web:candidate
+          build-args: |
+            VERSION=${{ steps.meta.outputs.tag }}
+            VCS_REF=${{ github.sha }}
+            BUILD_DATE=${{ steps.meta.outputs.date }}
+            APP_BUILD=${{ steps.meta.outputs.sha7 }}
+
+      - name: Label the image with this repository
+        run: |
+          printf 'FROM build/web:candidate\nLABEL org.opencontainers.image.source="%s" org.opencontainers.image.revision="%s" org.opencontainers.image.title="opengym-web-fork" org.opencontainers.image.description="openGym web, nutrition fork"\n' \
+            "${{ github.server_url }}/${{ github.repository }}" "${{ github.sha }}" | docker build -t "${{ steps.meta.outputs.image }}" -
+
+      - name: Smoke test the image that will be pushed
+        env:
+          IMG: ${{ steps.meta.outputs.image }}
+        run: |
+          set -euo pipefail
+          # It is this commit's frontend (the Apple Health stats page and the Health Auto Export screens are in the bundle).
+          docker run --rm --entrypoint sh "$IMG" -c 'grep -rlq "nutrition/health/history" /usr/share/nginx/html/assets'
+          docker run --rm --entrypoint sh "$IMG" -c 'grep -rlq "nutrition/health/hae" /usr/share/nginx/html/assets'
+          # nginx starts and serves the app (the api image is smoke-tested in its own job).
+          docker run -d --name web -p 8080:8080 -e NGINX_PORT=8080 "$IMG"
+          for i in $(seq 1 40); do curl -fsS http://127.0.0.1:8080/ >/dev/null 2>&1 && break; sleep 1; done
+          curl -fsS http://127.0.0.1:8080/ | grep -qi '<div id="root"' || { docker logs web; exit 1; }
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/nutrition/health)" = 200   # a deep link serves the app
+          docker rm -f web
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push
+        id: push
+        env:
+          IMG: ${{ steps.meta.outputs.image }}
+        run: |
+          set -euo pipefail
+          docker push "$IMG"
+          digest="$(docker inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$IMG" | grep -F "${IMG%%:*}@" | head -n1 | sed 's/.*@//')"
+          test -n "$digest"
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+          {
+            echo "### web image"
+            echo ""
+            echo "- name: \`${IMG}\`"
+            echo "- digest: \`${digest}\`"
+            echo "- pull by digest: \`${IMG%%:*}@${digest}\`"
+            echo "- commit: \`${GITHUB_SHA}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  summary:
+    needs: [api, web]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Both images, exactly
+        env:
+          API: ${{ needs.api.outputs.image }}
+          API_DIGEST: ${{ needs.api.outputs.digest }}
+          WEB: ${{ needs.web.outputs.image }}
+          WEB_DIGEST: ${{ needs.web.outputs.digest }}
+        run: |
+          {
+            echo "## Images pushed for ${GITHUB_SHA::7}"
+            echo ""
+            echo "| image | tag | digest |"
+            echo "|---|---|---|"
+            echo "| api (coach) | \`${API}\` | \`${API_DIGEST}\` |"
+            echo "| web | \`${WEB}\` | \`${WEB_DIGEST}\` |"
+            echo ""
+            echo "Deploy with: \`kubectl set image ... api=${API%%:*}@${API_DIGEST} web=${WEB%%:*}@${WEB_DIGEST}\` (or the tags above)."
+          } >> "$GITHUB_STEP_SUMMARY"
