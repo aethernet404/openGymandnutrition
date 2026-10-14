@@ -66,9 +66,9 @@ images with the repo so later runs can push to the same package. If a later run 
 `permission_denied: write_package`: package page → **Package settings → Manage Actions access → Add
 Repository → opengymandnutrition → Role: Write**.
 
-## What Cascade does (paste this)
+## What the server does
 
-See the end of this file's source message in the project chat; in short: snapshot the other namespaces' pods,
-create the pull secret in `fitness-test`, `kubectl set image` the two containers of `opengym-test` to the
-digest-pinned names, wait for the rollout, verify, snapshot the other pods again and compare. No `docker
-build`, no `ctr images import`, no test suite, replicas 1 and `Recreate` untouched.
+Pull only: snapshot the pods outside `fitness-test`, create the pull secret in `fitness-test`, `kubectl set image`
+the two containers of `opengym-test` to the digest-pinned names from the run summary, wait for the rollout,
+verify, snapshot the other pods again and compare. No `docker build`, no `ctr images import`, no test suite;
+replicas stay 1 and the strategy stays `Recreate`.
