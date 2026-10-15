@@ -22,7 +22,7 @@ switched Nutrition off.
 | `POST /api/nutrition/foods` | custom food `{name, brand?, serving?, grams?, per:{calories,protein_g,carbs_g,fat_g}, ext?}` |
 | `PUT /api/nutrition/foods?id=` | edit a custom food, or set `favorite` on any food |
 | `DELETE /api/nutrition/foods?id=` | already-logged entries keep their numbers |
-| `GET /api/nutrition/search?q=&source=all\|off\|usda` | Open Food Facts + USDA (key set by an admin), each hit as `bases[]` (label serving, 100 g). Only hits containing every typed word are returned, best first (`rank`, comparable across sources: USDA Foundation/SR Legacy reference foods lead). Per-source status in `sources`; ask `source=off` and `source=usda` separately and merge by `rank` to show whichever answers first. One source down never fails the search. A source that times out or errors is retried once. 40 lookups/min/profile |
+| `GET /api/nutrition/search?q=&source=all\|off\|usda\|fatsecret` | Open Food Facts + USDA (key set by an admin) + FatSecret (keys set by an admin), each hit as `bases[]` (label serving, 100 g). Only hits containing every typed word are returned, best first (`rank`, comparable across sources: USDA Foundation/SR Legacy reference foods lead). Per-source status in `sources`; ask `source=off` and `source=usda` separately and merge by `rank` to show whichever answers first. One source down never fails the search. A source that times out or errors is retried once. 40 lookups/min/profile |
 | `GET /api/nutrition/barcode?code=` | Open Food Facts product by 8–14 digit barcode |
 | `POST /api/nutrition/analyze` | `{kind:'photo', image:<base64 jpeg/png/webp>, note?}` or `{kind:'text', text}` → an editable **draft** (nothing saved). Coach's Claude Agent SDK path, inline image, own daily allowance |
 | `PUT /api/nutrition/coach-share` | `{share:boolean}` opt in/out of the numbers-only summary the Coach may read (default off) |
@@ -57,3 +57,5 @@ destination: the Claude runtime talks to Anthropic exactly as the Coach does.
 `routes.js` (HTTP), `store.js` (per-profile file, write queue), `validate.js`, `config.js` (admin settings),
 `lookup.js` (OFF/USDA), `analyze.js` + `vision.js` + `pipeline.js` + `meal.js` + `prompt.js` (AI estimate),
 `health.js` (Apple Health token + ingest), `jobdir.js`, `coach-summary.js` (the Coach's read-only view), `spike/` (Phase 1 live check).
+
+`fatsecret.js` — the FatSecret Platform API source (OAuth token cache, search, barcode, per-profile and server-wide daily budget); `POST /api/admin/nutrition/test-fatsecret` checks the keys. See `docs/NUTRITION_FATSECRET.md`.

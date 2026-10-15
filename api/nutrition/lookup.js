@@ -24,7 +24,7 @@
  * language Open Food Facts results are preferred in, can be set by env.
  */
 import { clean, round } from './validate.js';
-import { rankHits, chooseServingGrams, servingLabel } from './rank.js';
+import { rankHits, dupKey, chooseServingGrams, servingLabel } from './rank.js';
 
 const OFF_BASE = () => (process.env.NUTRITION_OFF_BASE || 'https://world.openfoodfacts.org').replace(/\/$/, '');
 const USDA_BASE = () => (process.env.NUTRITION_USDA_BASE || 'https://api.nal.usda.gov/fdc/v1').replace(/\/$/, '');
@@ -46,9 +46,10 @@ const CACHE_MAX = 200;
 
 /** Why a source did not answer, in classes the app can word. */
 export class LookupError extends Error {
-  constructor(kind, message) { super(message); this.kind = kind; }
+  // `text` is a complete sentence for the person, used as it is (FatSecret's wrong-key and wrong-IP messages).
+  constructor(kind, message, text) { super(message); this.kind = kind; if (text) this.text = text; }
 }
-// kind: 'timeout' | 'down' | 'rate' | 'auth' | 'bad'
+// kind: 'timeout' | 'down' | 'rate' | 'auth' | 'bad' | 'ip' | 'plan' | 'limit' (the last three: FatSecret)
 const WORDS = {
   timeout: 'did not answer in time',
   down: 'is not answering right now',
@@ -56,7 +57,7 @@ const WORDS = {
   auth: 'rejected the API key',
   bad: 'sent something unreadable'
 };
-export const describe = (name, err) => `${name} ${WORDS[err.kind] || WORDS.down}`;
+export const describe = (name, err) => err.text || `${name} ${WORDS[err.kind] || WORDS.down}`;
 const RETRYABLE = new Set(['timeout', 'down', 'bad']);
 
 const num = v => { const n = typeof v === 'string' && v.trim() !== '' ? Number(v) : v; return typeof n === 'number' && Number.isFinite(n) ? n : null; };
@@ -199,7 +200,8 @@ function logShape(source, kind, status, data, now) {
 export function createLookup({
   fetch: fetchFn = globalThis.fetch, now = Date.now, sleep = ms => new Promise(r => setTimeout(r, ms)),
   timeoutMs = TIMEOUT_MS, retryTimeoutMs = Math.min(RETRY_TIMEOUT_MS, timeoutMs), retryDelayMs = RETRY_DELAY_MS,
-  budgetMs = timeoutMs + retryTimeoutMs + 3000, userAgent = 'openGym-nutrition (self-hosted)'
+  budgetMs = timeoutMs + retryTimeoutMs + 3000, userAgent = 'openGym-nutrition (self-hosted)',
+  fatsecret: fs = null           // fatsecret.js's client, injected so this file never imports it (it imports this one)
 } = {}) {
   const cache = new Map();
   const inflight = new Map();
@@ -284,6 +286,12 @@ export function createLookup({
     return remember(key, rankHits([...take(generic), ...take(branded)], q).slice(0, MAX_RESULTS), SEARCH_TTL);
   }
 
+  async function searchFatSecret(q, creds, uid) {
+    // Ranked like the others. Their own result cache lives in fatsecret.js (10 minutes, memory only).
+    const hits = await fs.search(q, creds, { uid });
+    return rankHits(hits, q).slice(0, MAX_RESULTS);
+  }
+
   /** Identical searches asked at once share one trip to the service. */
   function once(key, make) {
     if (inflight.has(key)) return inflight.get(key);
@@ -294,11 +302,11 @@ export function createLookup({
 
   /**
    * @param {string} q
-   * @param {{ usdaKey?: string|null, sources?: 'all'|'off'|'usda', fresh?: boolean }} o
+   * @param {{ usdaKey?: string|null, fatsecret?: {clientId:string, clientSecret:string}|null, uid?: string, sources?: 'all'|'off'|'usda'|'fatsecret', fresh?: boolean }} o
    * @returns {{ results: object[], sources: Record<string, {ok:boolean, skipped?:string, error?:string, kind?:string, count?:number}> }}
    *   `results` are ranked best first; `rank` is comparable across sources.
    */
-  async function search(q, { usdaKey = null, sources = 'all', fresh = false } = {}) {
+  async function search(q, { usdaKey = null, fatsecret: fsCreds = null, uid = null, sources = 'all', fresh = false } = {}) {
     if (fresh) for (const k of [...cache.keys()]) if (k.startsWith('usda|')) cache.delete(k);
     const status = {};
     const lists = {};
@@ -312,13 +320,36 @@ export function createLookup({
       if (usdaKey) run('usda', 'USDA FoodData Central', () => once('usda|' + q.toLowerCase(), () => searchUsda(q, usdaKey)));
       else status.usda = { ok: false, skipped: 'no-key' };
     }
+    if (sources === 'all' || sources === 'fatsecret') {
+      if (fsCreds && fs) run('fatsecret', 'FatSecret', () => once('fs|' + q.toLowerCase() + '|' + (uid || ''), () => searchFatSecret(q, fsCreds, uid)));
+      else status.fatsecret = { ok: false, skipped: 'no-key' };
+    }
     await Promise.all(jobs);
-    const results = [...(lists.usda || []), ...(lists.off || [])].sort((a, b) => b.rank - a.rank);
+    // Best first, and a food that two sources both have (same name, brand and calories) is shown once.
+    const seen = new Set();
+    const results = [...(lists.usda || []), ...(lists.off || []), ...(lists.fatsecret || [])].sort((a, b) => b.rank - a.rank)
+      .filter(h => { const k = dupKey(h); if (seen.has(k)) return false; seen.add(k); return true; });
     return { results: results.slice(0, MAX_RESULTS * 2), sources: status };
   }
 
   /** @returns {{ found: boolean, product?: object, error?: string, kind?: string }} */
-  async function barcode(code) {
+  async function barcode(code, { fatsecret: fsCreds = null, uid = null } = {}) {
+    const key = 'bc|' + code + (fsCreds ? '|fs' : '');
+    const hit = recall(key); if (hit) return hit;
+    // Open Food Facts first; FatSecret only for a code it does not know (or knows without nutrition).
+    const off = await barcodeOff(code);
+    if (off.found || off.reason === 'error' || !fsCreds || !fs) return off.found || off.reason === 'error' ? off : remember(key, off, 5 * 60000);
+    try {
+      const r = await fs.barcode(code, fsCreds, { uid });
+      if (r.found) return remember(key, { found: true, product: r.product }, 60 * 60000);
+      return remember(key, { ...off, fatsecret: r.unavailable ? { skipped: r.unavailable } : { ok: true, found: false } }, 5 * 60000);
+    } catch (e) {
+      const text = e instanceof LookupError ? describe('FatSecret', e) : describe('FatSecret', new LookupError('down'));
+      return { ...off, fatsecret: { ok: false, kind: e?.kind || 'down', error: text } };    // not cached: the next scan asks again
+    }
+  }
+
+  async function barcodeOff(code) {
     const key = 'bc|' + code;
     const hit = recall(key); if (hit) return hit;
     try {

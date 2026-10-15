@@ -10,6 +10,8 @@ import * as store from './store.js';
 import * as v from './validate.js';
 import * as coachCfg from '../coach/config.js';
 import { createLookup, cleanBarcode } from './lookup.js';
+import { createFatSecret, createUsage, SERVER_DAILY_CAP, USER_DAILY_CAP } from './fatsecret.js';
+import path from 'node:path';
 import * as health from './health.js';
 import * as hae from './hae.js';
 import * as haeDebug from './hae-debug.js';
@@ -20,7 +22,10 @@ const URL_BASE = 'http://x';
 const query = req => new URL(req.url, URL_BASE).searchParams;
 
 export function nutritionRoutes({
-  json, readBody, readSession, requireAdmin, lookup = createLookup(), analyzer = createAnalyzer(),
+  json, readBody, readSession, requireAdmin, analyzer = createAnalyzer(),
+  // FatSecret's calls are budgeted per profile and per day for the whole server (fatsecret.js); the count survives restarts.
+  fatsecret = createFatSecret({ usage: createUsage({ file: path.join(cfg.dataDir(), 'fatsecret-usage.json') }) }),
+  lookup = createLookup({ fatsecret }),
   // server.js supplies the address its sign-in throttle counts (proxy headers handled there) and whether a
   // profile still exists and is enabled; the defaults suit tests and a bare node run.
   limitAddress = req => String(req.socket?.remoteAddress || 'unknown'), userActive = () => true
@@ -114,7 +119,7 @@ export function nutritionRoutes({
       const avail = availability(user.id);
       json(res, 200, {
         ai: { limit: c.aiDailyCap, used, remaining: Math.max(0, c.aiDailyCap - used), available: avail.ok && c.aiDailyCap > 0, reason: c.aiDailyCap === 0 ? 'off' : avail.ok ? null : avail.code },
-        lookup: { off: true, usda: c.usdaKeySet }, meals: v.MEALS,
+        lookup: { off: true, usda: c.usdaKeySet, fatsecret: c.fatsecretSet }, meals: v.MEALS,
         // Whether there is a Coach to share with at all, and whether this profile has chosen to.
         coach: { available: coachCfg.isEnabled() && coachCfg.isConnected(), share: d.coachShare === true },
         health: { ...health.tokenStatus(user.id), eatBack: store.eatBackOf(d) }
@@ -151,7 +156,7 @@ export function nutritionRoutes({
         if (r && r.food !== undefined) {
           const f = v.food(r.food);
           if (!f.ok) return invalid(res, f);
-          if (!['off', 'usda', 'ai'].includes(f.value.source) || (f.value.source !== 'ai' && !f.value.ext)) return fail(res, 400, 'a looked-up food needs its source and id');
+          if (!['off', 'usda', 'fatsecret', 'ai'].includes(f.value.source) || (f.value.source !== 'ai' && !f.value.ext)) return fail(res, 400, 'a looked-up food needs its source and id');
           snapshot = f.value;
         }
         // A batch inherits the day's meal unless an entry names its own.
@@ -233,10 +238,13 @@ export function nutritionRoutes({
         if (!f) return null;
         // A search result or AI recent is a snapshot of someone else's data: only its favourite
         // flag is the user's to change. Editing it means saving it as their own custom food.
+        // FatSecret's terms do not let their data be kept, so a food from there cannot be starred (it is a recent for 24 hours).
+        if (f.source === 'fatsecret' && checked.value.favorite) return { refused: 'fatsecret' };
         const patch = f.source === 'custom' ? checked.value : { favorite: checked.value.favorite ?? f.favorite };
         delete patch.source;
         return Object.assign(f, patch);
       });
+      if (food?.refused) return fail(res, 400, 'FatSecret’s terms do not allow keeping their foods. Use “Add it as my food” on the barcode result, or create it under My foods, to keep a copy.');
       if (!food) return fail(res, 404, 'no such food');
       json(res, 200, { food });
     }),
@@ -254,16 +262,16 @@ export function nutritionRoutes({
       const q = v.clean(query(req).get('q'), 80);
       if (q.length < 2) return fail(res, 400, 'type at least two letters to search');
       const source = query(req).get('source') || 'all';
-      if (!['all', 'off', 'usda'].includes(source)) return fail(res, 400, 'source must be all, off or usda');
+      if (!['all', 'off', 'usda', 'fatsecret'].includes(source)) return fail(res, 400, 'source must be all, off, usda or fatsecret');
       if (throttled(res, user)) return;
-      json(res, 200, { q, ...(await lookup.search(q, { usdaKey: cfg.usdaKey(), sources: source })) });
+      json(res, 200, { q, ...(await lookup.search(q, { usdaKey: cfg.usdaKey(), fatsecret: cfg.fatsecretCreds(), uid: user.id, sources: source })) });
     }),
 
     'GET /api/nutrition/barcode': guarded(async (req, res, user) => {
       const code = cleanBarcode(query(req).get('code'));
       if (!code) return fail(res, 400, 'a barcode is 8 to 14 digits');
       if (throttled(res, user)) return;
-      json(res, 200, { code, ...(await lookup.barcode(code)) });
+      json(res, 200, { code, ...(await lookup.barcode(code, { fatsecret: cfg.fatsecretCreds(), uid: user.id })) });
     }),
 
     /* ----- Apple Health, via a Shortcut ----- */
@@ -418,15 +426,32 @@ export function nutritionRoutes({
 
     'GET /api/admin/nutrition': async (req, res) => {
       if (!requireAdmin(req, res)) return;
-      json(res, 200, { ...cfg.load(), usdaKeyHint: cfg.usdaKeyHint(), aiCapMax: cfg.AI_CAP_MAX, aiCapDefault: cfg.AI_CAP_DEFAULT });
+      json(res, 200, { ...cfg.load(), usdaKeyHint: cfg.usdaKeyHint(), fatsecretIdHint: cfg.fatsecretIdHint(), fatsecretUsage: fatsecret.usage?.snapshot?.() ?? null, aiCapMax: cfg.AI_CAP_MAX, aiCapDefault: cfg.AI_CAP_DEFAULT });
     },
 
     'PUT /api/admin/nutrition': async (req, res) => {
       if (!requireAdmin(req, res)) return;
-      const r = cfg.save(await readBody(req));
+      const body = await readBody(req);
+      const r = cfg.save(body);
       if (!r.ok) return fail(res, 400, r.error);
+      if (body && typeof body === 'object' && body.fatsecret !== undefined) fatsecret.forget();     // a new pair starts with no cached token or results
       if (!r.config.healthDebug) haeDebug.clear();
-      json(res, 200, { ...r.config, usdaKeyHint: cfg.usdaKeyHint(), aiCapMax: cfg.AI_CAP_MAX, aiCapDefault: cfg.AI_CAP_DEFAULT });
+      json(res, 200, { ...r.config, usdaKeyHint: cfg.usdaKeyHint(), fatsecretIdHint: cfg.fatsecretIdHint(), fatsecretUsage: fatsecret.usage?.snapshot?.() ?? null, aiCapMax: cfg.AI_CAP_MAX, aiCapDefault: cfg.AI_CAP_DEFAULT });
+    },
+
+    // Checks the stored FatSecret keys: a token, a real search, and whether this edition grants barcode lookups.
+    // The answer is a verdict in words; neither the keys nor the token are ever in it.
+    'POST /api/admin/nutrition/test-fatsecret': async (req, res) => {
+      const admin = requireAdmin(req, res); if (!admin) return;
+      const creds = cfg.fatsecretCreds();
+      if (!creds) return fail(res, 400, 'no FatSecret keys are set');
+      const t0 = Date.now();
+      try {
+        const r = await fatsecret.test(creds, { uid: admin.id });
+        json(res, 200, { ok: true, count: r.count, barcode: r.barcode, ms: Date.now() - t0 });
+      } catch (e) {
+        json(res, 200, { ok: false, kind: e?.kind || 'down', error: e?.text || 'FatSecret did not answer.', ms: Date.now() - t0 });
+      }
     },
 
     // Checks the stored USDA key with a real search, so the admin knows before anyone else finds out.

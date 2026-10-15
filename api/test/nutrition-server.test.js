@@ -361,3 +361,61 @@ test('Health Auto Export through the real server: Bearer only, workouts + weight
   assert.ok(!JSON.stringify(cap).includes(token.split('_')[2]));
   assert.ok(!h.log.includes(token.split('_')[2]), 'the token is never logged');
 });
+
+test('FatSecret through the real server: keys saved encrypted, token + search wired, a refused IP named, nothing secret in the log or on disk', async t => {
+  const calls = { token: [], api: [] };
+  const mode = { ip: false };
+  const SECRET = 'REALSECRET0123456789abcdef', ID = 'fsclientid0123456789';
+  const srv = http.createServer((req, res) => {
+    const send = (code, obj) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(obj)); };
+    const u = new URL(req.url, 'http://x');
+    if (u.pathname === '/fs/connect/token') { calls.token.push(req.headers.authorization); return send(200, { access_token: 'tok-' + calls.token.length, expires_in: 86400, token_type: 'Bearer' }); }
+    if (u.pathname === '/fs/rest/foods/search/v4') {
+      calls.api.push({ auth: req.headers.authorization, q: u.searchParams.get('search_expression') });
+      if (mode.ip) return send(200, { error: { code: 21, message: "Invalid IP address detected: '198.51.100.7'" } });
+      return send(200, { foods_search: { max_results: '20', total_results: '1', page_number: '0', results: { food: { food_id: '3001', food_name: 'Taquitos, Beef & Cheese', food_type: 'Brand', brand_name: '7-Eleven', servings: { serving: [{ serving_id: '5001', serving_description: '1 taquito', metric_serving_amount: '76.000', metric_serving_unit: 'g', calories: '190', carbohydrate: '20', protein: '7', fat: '9' }] } } } } });
+    }
+    send(404, {});
+  });
+  await new Promise(r => srv.listen(0, '127.0.0.1', r));
+  t.after(() => srv.close());
+  const base = `http://127.0.0.1:${srv.address().port}`;
+  const h = await boot(t, { NUTRITION_FATSECRET_TOKEN_URL: base + '/fs/connect/token', NUTRITION_FATSECRET_BASE: base + '/fs/rest', NUTRITION_OFF_BASE: base + '/off' });
+
+  let r = await h.call('GET', '/api/nutrition/search?q=7-eleven+taquitos&source=fatsecret', USER);
+  assert.equal(r.status, 200, h.log);
+  assert.deepEqual(r.body.sources.fatsecret, { ok: false, skipped: 'no-key' });
+  assert.equal(calls.token.length, 0, 'not contacted without keys');
+  assert.equal((await h.call('PUT', '/api/admin/nutrition', USER, { fatsecret: { clientId: ID, clientSecret: SECRET } })).status, 403);
+  const saved = await h.call('PUT', '/api/admin/nutrition', ADMIN, { fatsecret: { clientId: ID, clientSecret: SECRET } });
+  assert.equal(saved.status, 200, h.log);
+  assert.equal(saved.body.fatsecretSet, true);
+  assert.ok(!JSON.stringify(saved.body).includes(SECRET));
+  assert.ok(!fs.readFileSync(path.join(h.dataDir, 'nutrition', 'config.json'), 'utf8').includes(SECRET), 'encrypted at rest');
+  assert.equal((await h.call('GET', '/api/nutrition/config', USER)).body.lookup.fatsecret, true);
+  assert.ok(!JSON.stringify((await h.call('GET', '/api/nutrition/config', USER)).body).includes(ID));
+
+  r = await h.call('GET', '/api/nutrition/search?q=7-eleven+taquitos&source=fatsecret', USER);
+  assert.equal(r.status, 200, h.log);
+  assert.deepEqual(r.body.sources.fatsecret, { ok: true, count: 1 });
+  assert.equal(r.body.results[0].source, 'fatsecret');
+  assert.equal(r.body.results[0].bases[0].label, '1 taquito (76 g)');
+  assert.equal(calls.token[0], 'Basic ' + Buffer.from(`${ID}:${SECRET}`).toString('base64'));
+  assert.equal(calls.api[0].auth, 'Bearer tok-1');
+  assert.equal(calls.api[0].q, '7-eleven taquitos');
+  // "all" asks every source at once; FatSecret is one of three.
+  r = await h.call('GET', '/api/nutrition/search?q=taquitos', USER);
+  assert.ok(r.body.sources.fatsecret.ok && r.body.sources.off && r.body.sources.usda);
+  const test = await h.call('POST', '/api/admin/nutrition/test-fatsecret', ADMIN);
+  assert.equal(test.body.ok, true);
+  assert.ok(fs.existsSync(path.join(h.dataDir, 'nutrition', 'fatsecret-usage.json')), 'the daily budget is kept on disk');
+  assert.ok((await h.call('GET', '/api/admin/nutrition', ADMIN)).body.fatsecretUsage.used >= 3);
+
+  mode.ip = true;
+  r = await h.call('GET', '/api/nutrition/search?q=burrito+bowl&source=fatsecret', USER);
+  assert.equal(r.body.sources.fatsecret.kind, 'ip');
+  assert.match(r.body.sources.fatsecret.error, /add the server’s public IP address/);
+
+  assert.ok(!h.log.includes(SECRET) && !h.log.includes('tok-') && !h.log.includes('198.51.100.7') && !h.log.includes('burrito'), 'no key, token, address or query in the log');
+  assert.equal(h.log.split('\n').filter(l => /^\s+at /.test(l)).length, 0);
+});

@@ -15,11 +15,13 @@ import { allowanceText, unavailableText } from './ai.js'
 import { nt } from './i18n.js'
 import * as nutri from './api.js'
 import { MACRO_LABEL, MEALS, MEAL_LABEL, amountPatch, entryBase, foodBody, gramsForQty, macroLine, qtyForGramsOf, quickBody, scaleEntry, scaleFood, trim } from './diary.js'
-import { SOURCE_LABEL, SOURCE_SHORT, barcodeOf, defaultBase, gramsOf, hitLine, qtyForGrams, snapshotOf, sourceNotes } from './lookup.js'
+import { FATSECRET_CREDIT, FATSECRET_URL, NO_RETRY, SOURCE_LABEL, SOURCE_SHORT, barcodeOf, defaultBase, gramsOf, hitLine, qtyForGrams, snapshotOf, sourceNotes } from './lookup.js'
 import { NO_CODE_TEXT, gtinCheckOk, lookupCode, scanMethods } from './barcode.js'
 import * as finder from './search.js'
 
 const toast = m => useUI.getState().toast(m)
+// "A and B", "A, B and C"
+const andList = names => (names.length > 2 ? names.slice(0, -1).join(', ') + ' ' + nt('and') + ' ' + names.at(-1) : names.join(' ' + nt('and') + ' '))
 const fail = e => toast(e?.message || nt('Something went wrong'))
 const mealOptions = () => MEALS.map(m => ({ value: m, label: nt(MEAL_LABEL[m]) }))
 
@@ -55,10 +57,15 @@ function QuickAdd({ date, meal, initialName = '', onSaved, close }) {
   </>
 }
 
+/** The credit FatSecret's terms require wherever their results are shown. */
+export function FatSecretCredit() {
+  return <a className="nut-credit" href={FATSECRET_URL} target="_blank" rel="noopener noreferrer">{nt(FATSECRET_CREDIT)}</a>
+}
+
 /* One portion chooser for every kind of food: my own, a recent, a search hit, a scanned product.
    `bases` are the ways the food can be measured; the amount is shown as servings AND, where the
    base has a weight, as grams, and the two stay in step. */
-function Portion({ name, brand, bases, meal, onBack, onAdd, busy, tag }) {
+function Portion({ name, brand, bases, meal, onBack, onAdd, busy, tag, credit = false }) {
   const [bi, setBi] = useState(0)
   const [qty, setQty] = useState(1)
   const base = bases[bi]
@@ -84,13 +91,14 @@ function Portion({ name, brand, bases, meal, onBack, onAdd, busy, tag }) {
       <span className="nut-input nut-cap"><NumberField value={grams} onChange={g => { const q = qtyForGrams(base, g); if (q) setQty(q) }} aria-label={nt('Weight in grams')} /><i>g</i></span>
     </label>}
     <div className="nut-preview"><b>{s.calories}</b> kcal<span className="muted"> · {macroLine(s)}</span></div>
+    {credit && <div className="nut-credit-row"><FatSecretCredit /></div>}
     <div style={{ height: 14 }} />
     <Button variant="primary" onClick={() => onAdd(qty, base)} disabled={busy}>{nt('Add to {0}', nt(MEAL_LABEL[meal]).toLowerCase())}</Button>
   </>
 }
 
 const basesOfFood = f => [{ label: f.serving.label, grams: f.serving.grams, per: f.per }]
-const tagOfFood = f => (f.source === 'off' || f.source === 'usda' ? SOURCE_SHORT[f.source] : null)
+const tagOfFood = f => (f.source === 'off' || f.source === 'usda' || f.source === 'fatsecret' ? SOURCE_SHORT[f.source] : null)
 
 function FoodPick({ date, meal, onSaved, close }) {
   const [scope, setScope] = useState('recent')
@@ -114,7 +122,7 @@ function FoodPick({ date, meal, onSaved, close }) {
     } catch (e) { fail(e); setBusy(false) }
   }
 
-  if (picked) return <Portion name={picked.name} brand={picked.brand} bases={basesOfFood(picked)} meal={meal} tag={tagOfFood(picked)} busy={busy} onBack={() => setPicked(null)} onAdd={add} />
+  if (picked) return <Portion name={picked.name} brand={picked.brand} bases={basesOfFood(picked)} meal={meal} tag={tagOfFood(picked)} credit={picked.source === 'fatsecret'} busy={busy} onBack={() => setPicked(null)} onAdd={add} />
 
   return <>
     <Segmented value={scope} onChange={setScope} options={[{ value: 'recent', label: nt('Recent') }, { value: 'favorite', label: nt('Favourites') }, { value: 'all', label: nt('All') }]} />
@@ -217,15 +225,17 @@ function SearchResults({ per, q, slow, isAdmin, ai, onPick, onRetry, onDescribe,
   return <>
     {v.errors.map(e => <div key={e.id} className="nut-banner warn" role="alert">
       <Icon name="warning" /><span>{nt(e.error)}</span>
-      {e.kind !== 'auth' && <button className="linkbtn" onClick={() => onRetry(e.id)}>{nt('Retry')}</button>}
+      {!NO_RETRY.has(e.kind) && <button className="linkbtn" onClick={() => onRetry(e.id)}>{nt('Retry')}</button>}
     </div>)}
     {info.map((n, i) => <div key={i} className={'nut-banner ' + n.tone}><Icon name="info" /><span>{nt(n.text)}</span></div>)}
+    {v.fatsecretOnly && <div className="nut-banner info"><Icon name="info" /><span>{nt('Nothing relevant in Open Food Facts or USDA. These are from FatSecret (restaurant, chain and store foods).')}</span></div>}
     {v.results.length > 0 && <div className={'nut-pick-list' + (v.loading.length ? ' stale' : '')}>
       {v.results.map(h => <HitRow key={h.source + h.ext + h.bases[0].label} hit={h} onPick={onPick} />)}
     </div>}
+    {v.results.some(h => h.source === 'fatsecret') && <div className="nut-credit-row"><FatSecretCredit /></div>}
     {v.loading.length > 0 && <div className="nut-searching" role="status">
       <div className="nut-spinner sm" aria-hidden="true" />
-      <span>{nt(slow ? (v.loading.length > 1 ? '{0} are slow right now — still waiting…' : '{0} is slow right now — still waiting…') : 'Searching {0}…', v.loading.map(id => finder.NAME[id]).join(' and '))}</span>
+      <span>{nt(slow ? (v.loading.length > 1 ? '{0} are slow right now — still waiting…' : '{0} is slow right now — still waiting…') : 'Searching {0}…', andList(v.loading.map(id => finder.NAME[id])))}</span>
     </div>}
     {v.nothingFound && <div className="nut-nothing">
       <div>{nt('Nothing found for “{0}”.', q)}</div>
@@ -301,7 +311,7 @@ function SearchTab({ date, meal, ai, onSaved, onDescribe, onQuick, close }) {
     } catch (e) { fail(e); setBusy(false) }
   }
 
-  if (picked) return <Portion name={picked.name} brand={picked.brand} bases={picked.bases} meal={meal} tag={SOURCE_LABEL[picked.source]} busy={busy} onBack={() => setPicked(null)} onAdd={add} />
+  if (picked) return <Portion name={picked.name} brand={picked.brand} bases={picked.bases} meal={meal} tag={SOURCE_LABEL[picked.source]} credit={picked.source === 'fatsecret'} busy={busy} onBack={() => setPicked(null)} onAdd={add} />
 
   const r = bc?.result
   return <>
@@ -314,9 +324,11 @@ function SearchTab({ date, meal, ai, onSaved, onDescribe, onQuick, close }) {
     {bc?.status === 'loading' && <div className="muted small nut-empty">{nt('Looking up the barcode…')}</div>}
     {bc?.status === 'error' && <div className="nut-banner warn"><Icon name="warning" /><span>{bc.error}</span><button className="linkbtn" onClick={() => lookup(bc.code)}>{nt('Try again')}</button></div>}
     {r?.found && <div className="nut-pick-list"><HitRow hit={r.product} onPick={setPicked} /></div>}
+    {r?.found && r.product.source === 'fatsecret' && <div className="nut-credit-row"><FatSecretCredit /></div>}
+    {r && !r.found && r.fatsecret?.error && <div className="nut-banner warn" role="alert"><Icon name="warning" /><span>{nt(r.fatsecret.error)}</span>{!NO_RETRY.has(r.fatsecret.kind) && <button className="linkbtn" onClick={() => lookup(bc.code)}>{nt('Retry')}</button>}</div>}
     {r && !r.found && <div className="nut-banner info">
       <Icon name="info" />
-      <span>{r.reason === 'error' ? nt(r.error) : r.reason === 'no-nutrition' ? nt('“{0}” is in Open Food Facts but has no nutrition data.', r.name) : nt('Barcode {0} is not in Open Food Facts.', bc.code)}{bc.warn && r.reason !== 'error' ? ' ' + nt('Its check digit does not add up, so look for a typo.') : ''}</span>
+      <span>{r.reason === 'error' ? nt(r.error) : r.reason === 'no-nutrition' ? nt('“{0}” is in Open Food Facts but has no nutrition data.', r.name) : (r.fatsecret?.ok ? nt('Barcode {0} is not in Open Food Facts or FatSecret.', bc.code) : nt('Barcode {0} is not in Open Food Facts.', bc.code))}{bc.warn && r.reason !== 'error' ? ' ' + nt('Its check digit does not add up, so look for a typo.') : ''}</span>
       {r.reason === 'error'
         ? <button className="linkbtn" onClick={() => lookup(bc.code)}>{nt('Try again')}</button>
         : <button className="linkbtn" onClick={() => openFoodSheet({ prefill: { name: r.name || '', ext: bc.code }, onSaved: () => { onSaved(); close() } })}>{nt('Add it as my food')}</button>}
@@ -324,7 +336,7 @@ function SearchTab({ date, meal, ai, onSaved, onDescribe, onQuick, close }) {
 
     {per && <SearchResults per={per} q={asked.current || text.trim()} slow={slow} isAdmin={isAdmin} ai={ai}
       onPick={setPicked} onRetry={id => search(asked.current, [id])} onDescribe={() => onDescribe(text.trim())} onQuick={() => onQuick(text.trim())} />}
-    {!per && !bc && !scanOpen && <div className="muted small nut-empty">{nt('Search Open Food Facts and USDA, or scan a barcode.')}</div>}
+    {!per && !bc && !scanOpen && <div className="muted small nut-empty">{nt('Search Open Food Facts, USDA and FatSecret, or scan a barcode.')}</div>}
   </>
 }
 

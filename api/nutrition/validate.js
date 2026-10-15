@@ -8,7 +8,7 @@
 
 export const MEALS = ['breakfast', 'lunch', 'dinner', 'snack'];
 export const SOURCES = ['manual', 'quick', 'food', 'ai'];
-export const FOOD_SOURCES = ['custom', 'off', 'usda', 'ai'];
+export const FOOD_SOURCES = ['custom', 'off', 'usda', 'fatsecret', 'ai'];
 export const CONFIDENCE = ['low', 'medium', 'high'];
 
 export const LIMITS = {

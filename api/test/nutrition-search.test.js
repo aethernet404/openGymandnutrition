@@ -190,7 +190,7 @@ test('no results at all is an honest, empty, successful answer from every source
   const { lk } = service(u => (isOff(u) ? res({ products: [] }) : res({ foods: [] })));
   const r = await lk.search('zzzzqx', { usdaKey: 'KEY12345' });
   assert.deepEqual(r.results, []);
-  assert.deepEqual(r.sources, { off: { ok: true, count: 0 }, usda: { ok: true, count: 0 } });
+  assert.deepEqual(r.sources, { off: { ok: true, count: 0 }, usda: { ok: true, count: 0 }, fatsecret: { ok: false, skipped: 'no-key' } });
 });
 
 test('hits that do not contain what was typed are dropped even when the source returned nothing else', async () => {

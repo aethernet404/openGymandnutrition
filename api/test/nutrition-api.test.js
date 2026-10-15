@@ -296,7 +296,7 @@ test('search passes the stored USDA key only when one is set, and says USDA is o
 
   const lk2 = fakeLookup();
   await call(R, 'GET /api/nutrition/search', { url: '/api/nutrition/search?q=nutella&source=usda', lookup: lk2 });
-  assert.deepEqual(lk2.calls.search[0], ['nutella', { usdaKey: 'abcd1234EFGH5678', sources: 'usda' }]);
+  assert.deepEqual(lk2.calls.search[0], ['nutella', { usdaKey: 'abcd1234EFGH5678', fatsecret: null, uid: 'ua', sources: 'usda' }]);
   assert.equal((await call(R, 'GET /api/nutrition/config', { as: 'a' })).out.lookup.usda, true);
 });
 

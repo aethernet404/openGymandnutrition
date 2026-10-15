@@ -178,3 +178,7 @@
 /* Centred text, in the page flow. (Never name this `.center`: that is the app's global dialog class, which is
    position:absolute with a background and a shadow — it floated the weight line over the diary.) */
 .nut-center{display:flex;flex-direction:column;align-items:center;text-align:center;min-width:0}
+
+/* FatSecret credit: required wherever their results are shown */
+.nut-credit-row{margin:8px 2px 0;font-size:12px;text-align:end}
+.nut-credit{color:var(--label-2);text-decoration:underline;text-underline-offset:2px;overflow-wrap:anywhere}

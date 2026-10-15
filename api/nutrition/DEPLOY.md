@@ -46,3 +46,7 @@ kubectl -n <ns> get deploy/<deployment> -o jsonpath='{.spec.replicas}{"\n"}'   #
   app calls your public address, so Cloudflare/nginx must let `POST /api/nutrition/health/hae` through with its
   `Authorization` header (same as the Shortcut route). Payloads are small with Summarize Data on; the 5 MB `/api/`
   limit in nginx applies. The optional admin debug switch (Goals → Health Auto Export debug) keeps data in memory only.
+- **FatSecret (optional, admin)**: Nutrition → Goals → *FatSecret food search* (Client ID + Secret; see `docs/NUTRITION_FATSECRET.md`).
+  Outbound HTTPS from the api container to `oauth.fatsecret.com:443` and `platform.fatsecret.com:443`. FatSecret only answers
+  requests from IP addresses registered in its dashboard: register the server's public IP there. Optional env vars (api container):
+  `NUTRITION_FATSECRET_DAILY_CAP` (default 4000, max 5000) and `NUTRITION_FATSECRET_USER_CAP` (default 400).

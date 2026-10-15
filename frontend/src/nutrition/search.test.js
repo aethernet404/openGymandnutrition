@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { fresh, merge, settle, failed, run, view, NAME } from './search.js'
+import { fresh, merge, settle, failed, run, view, NAME, SOURCES } from './search.js'
 
 const h = (source, ext, rank, name = ext) => ({ source, ext, name, rank, bases: [{ label: '100 g' }] })
 const ok = (id, hits) => ({ q: 'x', results: hits, sources: { [id]: { ok: true, count: hits.length } } })
@@ -36,14 +36,14 @@ describe('settle / failed', () => {
 })
 
 describe('run', () => {
-  const collect = () => { let per = fresh(); const log = []; return { onSource: (id, s) => { per = { ...per, [id]: s }; log.push([id, s.state]) }, get per() { return per }, log } }
+  const collect = (ids = ['usda', 'off']) => { let per = Object.fromEntries(ids.map(id => [id, { state: 'loading', hits: [] }])); const log = []; return { onSource: (id, s) => { per = { ...per, [id]: s }; log.push([id, s.state]) }, get per() { return per }, log } }
 
-  it('starts both sources at once and reports each as it lands, fastest first', async () => {
+  it('starts the sources at once and reports each as it lands, fastest first', async () => {
     let release
     const gate = new Promise(r => { release = r })
     const fetchSource = vi.fn((q, id) => (id === 'off' ? gate.then(() => ok('off', [h('off', 'o', 1100)])) : Promise.resolve(ok('usda', [h('usda', 'u', 2100)]))))
     const c = collect()
-    const p = run('egg', { fetchSource, onSource: c.onSource })
+    const p = run('egg', { fetchSource, onSource: c.onSource, ids: ['usda', 'off'] })
     await new Promise(r => setTimeout(r, 0))
     expect(fetchSource).toHaveBeenCalledTimes(2)
     expect(c.per.usda.state).toBe('ok'); expect(c.per.off.state).toBe('loading')
@@ -57,7 +57,7 @@ describe('run', () => {
   it('one source failing never hides the other', async () => {
     const fetchSource = async (q, id) => { if (id === 'off') throw Object.assign(new Error('x'), { code: 'timeout' }); return ok('usda', [h('usda', 'u', 2100)]) }
     const c = collect()
-    await run('egg', { fetchSource, onSource: c.onSource })
+    await run('egg', { fetchSource, onSource: c.onSource, ids: ['usda', 'off'] })
     const v = view(c.per)
     expect(v.results.map(x => x.ext)).toEqual(['u'])
     expect(v.errors).toHaveLength(1)
@@ -113,5 +113,26 @@ describe('view — the screen is always explained', () => {
     expect(v.errors).toHaveLength(1)
     expect(v.cannotTell).toBe(false)
   })
-  it('names both sources', () => { expect(NAME).toEqual({ off: 'Open Food Facts', usda: 'USDA' }) })
+  it('names the sources', () => { expect(NAME).toEqual({ off: 'Open Food Facts', usda: 'USDA', fatsecret: 'FatSecret' }) })
+  it('FatSecret is the third source, asked for like the others', () => { expect(SOURCES).toEqual(['usda', 'off', 'fatsecret']) })
+  it('FatSecret has the only answer: shown, and said to be the only source that had anything', () => {
+    const fs = { state: 'ok', hits: [h('fatsecret', 'f', 1120)], count: 1 }
+    const v = view({ usda: empty, off: empty, fatsecret: fs })
+    expect(v.results.map(x => x.ext)).toEqual(['f'])
+    expect(v).toMatchObject({ fatsecretOnly: true, nothingFound: false, cannotTell: false })
+    expect(view({ usda: { state: 'ok', hits: [h('usda', 'u', 2100)] }, off: empty, fatsecret: fs }).fatsecretOnly).toBe(false)
+    expect(view({ usda: empty, off: empty, fatsecret: loading }).fatsecretOnly).toBe(false)
+  })
+  it('FatSecret off or failing never leaves a blank list without a reason', () => {
+    const skipped = { state: 'skipped', hits: [], why: 'no-key' }
+    expect(view({ usda: empty, off: empty, fatsecret: skipped })).toMatchObject({ nothingFound: true, skipped: ['fatsecret'] })
+    const ipErr = { state: 'error', hits: [], error: 'FatSecret refused this server’s IP address.', kind: 'ip' }
+    const v = view({ usda: empty, off: empty, fatsecret: ipErr })
+    expect(v).toMatchObject({ nothingFound: false, cannotTell: true })
+    expect(v.errors[0]).toMatchObject({ id: 'fatsecret', kind: 'ip' })
+  })
+  it('a hit from the three sources is merged by rank, one food once', () => {
+    const per = { usda: { hits: [h('usda', '1', 2100)] }, off: { hits: [h('off', '2', 1100)] }, fatsecret: { hits: [h('fatsecret', '3', 1150), h('fatsecret', '3', 1150)] } }
+    expect(merge(per).map(x => x.ext)).toEqual(['1', '3', '2'])
+  })
 })

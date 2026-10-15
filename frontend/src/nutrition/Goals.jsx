@@ -100,6 +100,54 @@ function UsdaKey() {
   </Section>
 }
 
+// FatSecret's free Basic edition: restaurant, chain and convenience-store foods. Two fields; the secret is sent once and
+// never comes back (the server keeps it encrypted and only says whether a pair is set, and the last four of the ID).
+function FatSecretKeys() {
+  const [cfg, setCfg] = useState(null)
+  const [id, setId] = useState('')
+  const [secret, setSecret] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [result, setResult] = useState(null)
+  useEffect(() => { nutri.getAdmin().then(setCfg).catch(() => {}) }, [])
+  if (!cfg) return null
+  const save = async value => {
+    setBusy(true); setResult(null)
+    try { setCfg(await nutri.putAdmin({ fatsecret: value })); setId(''); setSecret(''); toast(value ? nt('FatSecret keys saved') : nt('FatSecret keys removed')) } catch (e) { toast(e.message) }
+    setBusy(false)
+  }
+  const test = async () => {
+    setBusy(true); setResult(null)
+    try { setResult(await nutri.testFatsecret()) } catch (e) { setResult({ ok: false, error: e.message }) }
+    setBusy(false)
+  }
+  const u = cfg.fatsecretUsage
+  return <Section title={nt('FatSecret food search')} footer={nt('Adds restaurant, chain and convenience-store foods (for example “7-Eleven taquitos”) to the search. The free Basic edition allows 5,000 calls a day; this server stops at {0} a day and {1} per person so it cannot run out by accident.', u?.cap ?? 4000, u?.userCap ?? 400)}>
+    <div className="lrow nut-usda">
+      <span className="lrow-m">
+        <span className="lrow-t">{cfg.fatsecretSet ? nt('Keys set (ID {0})', cfg.fatsecretIdHint || '…') : nt('No keys set')}</span>
+        <span className="lrow-s">{cfg.fatsecretSet ? nt('FatSecret search is on.') : nt('FatSecret search is off.')}{u && cfg.fatsecretSet ? ' ' + nt('Used today: {0} of {1}.', u.used, u.cap) : ''}</span>
+      </span>
+    </div>
+    <div className="lrow nut-usda-row">
+      <input className="field" type="text" autoComplete="off" spellCheck="false" placeholder={nt('Client ID')} value={id} onChange={e => setId(e.target.value)} aria-label={nt('FatSecret Client ID')} />
+    </div>
+    <div className="lrow nut-usda-row">
+      <input className="field" type="password" autoComplete="off" spellCheck="false" placeholder={nt('Client Secret')} value={secret} onChange={e => setSecret(e.target.value)} aria-label={nt('FatSecret Client Secret')} />
+      <Button size="sm" onClick={() => save({ clientId: id.trim(), clientSecret: secret.trim() })} disabled={busy || id.trim().length < 8 || secret.trim().length < 8}>{nt('Save')}</Button>
+    </div>
+    {cfg.fatsecretSet && <div className="lrow nut-usda-row">
+      <Button size="sm" onClick={test} disabled={busy}>{nt('Test keys')}</Button>
+      <Button size="sm" variant="ghost" style={{ color: 'var(--red)' }} onClick={() => save(null)} disabled={busy}>{nt('Remove keys')}</Button>
+      {result && <span className="small" style={{ color: result.ok ? 'var(--green)' : 'var(--red)' }}>{result.ok
+        ? nt('Works ({0} ms). Barcode lookup: {1}.', result.ms, result.barcode === 'available' ? nt('included') : result.barcode === 'not-in-plan' ? nt('not in this edition') : nt('unknown'))
+        : nt(result.error || 'Did not work')}</span>}
+    </div>}
+    <div className="lrow nut-usda-help"><span className="small muted">
+      {nt('Get free keys: sign up at')} <a href="https://platform.fatsecret.com/" target="_blank" rel="noopener noreferrer">platform.fatsecret.com</a>{nt(', choose the free Basic edition, then copy the Client ID and Client Secret (the “REST API OAuth 2.0” pair) from your dashboard. FatSecret only answers requests from IP addresses you register there: add the public IP address of this server under IP Restrictions. Attribution (“Powered by fatsecret”) is shown wherever their results appear.')}
+    </span></div>
+  </Section>
+}
+
 // Opt-in, off by default. The footer says exactly what leaves, because that is the whole consent.
 function CoachShare() {
   const [coach, setCoach] = useState(null)
@@ -155,6 +203,7 @@ export default function Goals() {
     {g && <CoachShare />}
     {user?.admin && <Admin />}
     {user?.admin && <UsdaKey />}
+    {user?.admin && <FatSecretKeys />}
     {user?.admin && <HealthDebug />}
   </div>
 }

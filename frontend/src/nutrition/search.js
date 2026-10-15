@@ -1,13 +1,13 @@
-// Searching two sources at once without letting either wait for, or hide, the other.
+// Searching three sources at once without letting either wait for, or hide, the other.
 //
-// The app asks the server for Open Food Facts and USDA separately and in parallel (the server
+// The app asks the server for Open Food Facts, USDA and FatSecret separately and in parallel (the server
 // answers each with hits that carry a comparable `rank`), shows whatever has arrived, and keeps a
 // status per source: still loading, answered, failed (with the reason, and a way to try just that
 // one again) or switched off. The screen is decided from that status by `view()` — one pure
 // function — so that "a blank list with no reason" is not a state it can reach.
 
-export const SOURCES = ['usda', 'off']
-export const NAME = { off: 'Open Food Facts', usda: 'USDA' }
+export const SOURCES = ['usda', 'off', 'fatsecret']
+export const NAME = { off: 'Open Food Facts', usda: 'USDA', fatsecret: 'FatSecret' }
 const MAX_SHOWN = 40
 
 export const fresh = () => Object.fromEntries(SOURCES.map(id => [id, { state: 'loading', hits: [] }]))
@@ -61,6 +61,7 @@ export async function run(q, { fetchSource, onSource, ids = SOURCES, stale = () 
  * @returns {{ results:object[], loading:string[], errors:{id:string,error:string,kind:string}[], skipped:string[], nothingFound:boolean, cannotTell:boolean }}
  *   nothingFound — every source that was asked answered, and there is truly nothing
  *   cannotTell   — nothing to show AND a source failed: not "no results", a search that did not complete
+ *   fatsecretOnly — the other sources answered with nothing relevant and every result shown is FatSecret's: say so
  */
 export function view(per) {
   const ids = SOURCES.filter(id => per[id])
@@ -71,6 +72,7 @@ export function view(per) {
   const settled = loading.length === 0
   return {
     results, loading, errors, skipped,
+    fatsecretOnly: settled && results.length > 0 && results.every(h => h.source === 'fatsecret'),
     nothingFound: settled && results.length === 0 && errors.length === 0,
     cannotTell: settled && results.length === 0 && errors.length > 0
   }

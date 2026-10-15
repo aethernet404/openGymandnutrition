@@ -73,6 +73,12 @@ export function relevance(query, name, brand = '') {
   return { full, matched, total: q.length, score }
 }
 
+/** The identity of a food for de-duplication: the same name, brand and calories per 100 g (or the first portion) is the same food. */
+export const dupKey = hit => {
+  const first = hit.bases?.find(b => b.grams === 100) || hit.bases?.[0]
+  return `${fold(hit.name)}|${fold(hit.brand)}|${first?.per?.calories}`
+}
+
 const GENERIC_USDA = new Set(['foundation', 'sr'])
 
 /**
@@ -86,8 +92,7 @@ export function rankHits(hits, query) {
   for (const hit of hits) {
     const r = relevance(query, hit.name, hit.brand)
     if (!r.full) continue
-    const first = hit.bases?.find(b => b.grams === 100) || hit.bases?.[0]
-    const key = `${fold(hit.name)}|${fold(hit.brand)}|${first?.per?.calories}`
+    const key = dupKey(hit)
     if (seen.has(key)) continue
     seen.add(key)
     let rank
@@ -96,6 +101,9 @@ export function rankHits(hits, query) {
       rank = 1000 + r.score
       if (hit.source === 'usda') rank += 10                      // a USDA branded label is checked data
       if (hit.source === 'off' && hit.preferred) rank += 8       // US market, English text
+      // A restaurant, chain or convenience-store item whose typed words include its brand ("7-Eleven taquitos"):
+      // that is exactly what the person asked for, and the other sources are the ones that lack it.
+      if (hit.source === 'fatsecret' && hit.brand && tokens(query).some(w => tokens(hit.brand).some(x => wordMatches(w, x)))) rank += 12
     }
     out.push({ ...hit, rank })
   }

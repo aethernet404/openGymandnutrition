@@ -171,7 +171,14 @@ export function range(d, from, to) {
 const norm = s => String(s || '').toLowerCase().replace(/\s+/g, ' ').trim();
 const foodKey = f => f.ext ? `${f.source}|${f.ext}|${norm(f.serving?.label)}|${f.serving?.grams ?? ''}` : `${f.source}|${norm(f.name)}|${norm(f.brand)}|${f.per.calories}|${f.per.protein_g}|${f.per.carbs_g}|${f.per.fat_g}`;
 
+/* FatSecret's terms let only their ids be stored; everything else may be cached for 24 hours. A food from there is
+   therefore kept as a recent for 24 hours and then forgotten (the numbers in a diary entry are the person's own record
+   of what they ate and stay). */
+export const FATSECRET_KEEP_MS = 24 * 3600 * 1000;
+const fsExpired = (f, now = Date.now()) => f.source === 'fatsecret' && now - (f.lastUsed || f.createdAt || 0) > FATSECRET_KEEP_MS;
+
 function pruneRecents(d) {
+  for (const f of Object.values(d.foods)) if (fsExpired(f)) delete d.foods[f.id];
   const recents = Object.values(d.foods).filter(f => f.source !== 'custom' && !f.favorite);
   if (recents.length <= LIMITS.recentFoods) return;
   recents.sort((a, b) => (a.lastUsed || 0) - (b.lastUsed || 0));
@@ -201,7 +208,7 @@ export function noteRecent(d, input) {
 }
 
 export function listFoods(d, { scope = 'all', q = '' } = {}) {
-  let list = Object.values(d.foods);
+  let list = Object.values(d.foods).filter(f => !fsExpired(f));
   if (scope === 'custom') list = list.filter(f => f.source === 'custom');
   else if (scope === 'favorite') list = list.filter(f => f.favorite);
   else if (scope === 'recent') list = list.filter(f => f.lastUsed);

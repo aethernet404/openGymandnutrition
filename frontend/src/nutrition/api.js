@@ -29,6 +29,7 @@ export const putAdmin = body => send('PUT', '/api/admin/nutrition', body)
 export const searchFoods = (text, source = 'all') => api('/api/nutrition/search?' + q({ q: text, source }), { timeout: 30000 })
 export const lookupBarcode = code => api('/api/nutrition/barcode?' + q({ code }), { timeout: 20000 })
 export const testUsda = () => send('POST', '/api/admin/nutrition/test-usda', {})
+export const testFatsecret = () => send('POST', '/api/admin/nutrition/test-fatsecret', {})
 
 // The model has up to 90 s on the server; the client waits a little longer than that.
 export const analyze = body => api('/api/nutrition/analyze', { method: 'POST', body: JSON.stringify(body), timeout: 100000 })
