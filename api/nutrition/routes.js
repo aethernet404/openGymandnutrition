@@ -223,8 +223,23 @@ export function nutritionRoutes({
       const body = await readBody(req);
       const checked = v.food(body);
       if (!checked.ok) return invalid(res, checked);
-      const food = await store.mutate(user.id, d => store.addFood(d, { ...checked.value, source: 'custom' }));
-      json(res, 201, { food });
+      // Saving something that may already be saved (an AI estimate turned into a food): with checkDuplicate the same
+      // name and brand (any case) is not silently doubled. 409 + the existing food asks the person; onDuplicate
+      // 'update' changes that food's serving and numbers, 'new' saves another beside it.
+      const check = body.checkDuplicate === true;
+      const choice = body.onDuplicate === 'update' || body.onDuplicate === 'new' ? body.onDuplicate : null;
+      const out = await store.mutate(user.id, d => {
+        const existing = check ? store.findSavedFood(d, checked.value.name, checked.value.brand) : null;
+        if (existing && !choice) return { duplicate: existing };
+        if (existing && choice === 'update') {
+          const { serving, per, origin } = checked.value;
+          Object.assign(existing, { serving, per }, origin ? { origin } : {});
+          return { food: existing, updated: true };
+        }
+        return { food: store.addFood(d, { ...checked.value, source: 'custom' }) };
+      });
+      if (out.duplicate) return json(res, 409, { error: 'You already have a saved food with that name and brand.', code: 'duplicate', existing: out.duplicate });
+      json(res, out.updated ? 200 : 201, { food: out.food, ...(out.updated ? { updated: true } : {}) });
     }),
 
     // Edit a food (any of its fields), or just favourite it. Entries already logged keep their numbers.
@@ -262,9 +277,14 @@ export function nutritionRoutes({
       const q = v.clean(query(req).get('q'), 80);
       if (q.length < 2) return fail(res, 400, 'type at least two letters to search');
       const source = query(req).get('source') || 'all';
-      if (!['all', 'off', 'usda', 'fatsecret'].includes(source)) return fail(res, 400, 'source must be all, off, usda or fatsecret');
+      if (!['all', 'mine', 'off', 'usda', 'fatsecret'].includes(source)) return fail(res, 400, 'source must be all, mine, off, usda or fatsecret');
+      // The person's own saved foods first: local, instant, no outside call and not counted against the lookup limit.
+      const mine = source === 'all' || source === 'mine' ? store.searchSaved(store.read(user.id), q) : null;
+      if (source === 'mine') return json(res, 200, { q, results: mine, sources: { mine: { ok: true, count: mine.length } } });
       if (throttled(res, user)) return;
-      json(res, 200, { q, ...(await lookup.search(q, { usdaKey: cfg.usdaKey(), fatsecret: cfg.fatsecretCreds(), uid: user.id, sources: source })) });
+      const out = await lookup.search(q, { usdaKey: cfg.usdaKey(), fatsecret: cfg.fatsecretCreds(), uid: user.id, sources: source });
+      if (!mine) return json(res, 200, { q, ...out });
+      json(res, 200, { q, results: [...mine, ...out.results], sources: { mine: { ok: true, count: mine.length }, ...out.sources } });
     }),
 
     'GET /api/nutrition/barcode': guarded(async (req, res, user) => {

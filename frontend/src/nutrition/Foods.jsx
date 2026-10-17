@@ -45,7 +45,7 @@ export default function Foods() {
     </div> : <div className="sect-b nut-foods">
       {foods.map(f => <div key={f.id} className="lrow nut-food">
         <button className="lrow-m nut-food-m" onClick={() => openFoodSheet({ food: f, onSaved: load })}>
-          <span className="lrow-t">{f.name}</span>
+          <span className="lrow-t">{f.name}{f.origin === 'ai' && <span className="tag nut-src nut-ai-badge">{nt('AI estimate')}</span>}</span>
           <span className="lrow-s">{f.brand ? f.brand + ' · ' : ''}{f.serving.label} · {f.per.calories} kcal · {macroLine(f.per)}</span>
         </button>
         <button className={'iconbtn nut-star' + (f.favorite ? ' on' : '')} onClick={() => star(f)} aria-label={f.favorite ? nt('Remove from favourites') : nt('Add to favourites')} aria-pressed={f.favorite}>

@@ -3,8 +3,8 @@
 // — see api/nutrition/lookup.js. Each base is one way of measuring a portion; an entry is priced
 // as qty × base.
 
-export const SOURCE_LABEL = { off: 'Open Food Facts', usda: 'USDA', fatsecret: 'FatSecret', custom: 'Mine', ai: 'AI' }
-export const SOURCE_SHORT = { off: 'OFF', usda: 'USDA', fatsecret: 'FatSecret' }
+export const SOURCE_LABEL = { mine: 'My food', off: 'Open Food Facts', usda: 'USDA', fatsecret: 'FatSecret', custom: 'Mine', ai: 'AI' }
+export const SOURCE_SHORT = { mine: 'My food', off: 'OFF', usda: 'USDA', fatsecret: 'FatSecret' }
 
 // FatSecret's Basic edition requires this credit, with a link, wherever its results are shown.
 export const FATSECRET_CREDIT = 'Powered by fatsecret'

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   shiftISO, validISO, relativeDay, mealForHour, fraction, remaining, macroSplit, kcalFromMacros,
-  scaleFood, parseAmount, quickBody, foodBody, goalsBody, macroLine, kgToUnit, weightText, workoutLine, weightTrend, sparkPath, entryBase, scaleEntry, gramsForQty, qtyForGramsOf, amountPatch
+  scaleFood, parseAmount, quickBody, foodBody, goalsBody, macroLine, kgToUnit, weightText, workoutLine, weightTrend, sparkPath, entryBase, scaleEntry, gramsForQty, qtyForGramsOf, amountPatch, findDuplicate, foodFromEntry, savedFoodBody, savedFields, savedOverrides
 } from './diary.js'
 
 describe('dates', () => {
@@ -220,5 +220,49 @@ describe('changing the amount of an entry', () => {
     const b = entryBase({ calories: 200, protein_g: 10, carbs_g: 20, fat_g: 5, qty: 1, grams: 100 })
     expect(amountPatch(b, 2)).toEqual({ qty: 2, grams: 200, base: { calories: 200, protein_g: 10, carbs_g: 20, fat_g: 5, grams: 100 } })
     expect(amountPatch(entryBase({ calories: 5 }), 2).grams).toBeUndefined()
+  })
+})
+
+describe('saving an estimate or an entry as a food', () => {
+  it('foodFromEntry: one serving from the base, not the entry’s total; the entry’s own label and weight; AI entries are marked', () => {
+    const f = foodFromEntry({ name: ' Pliny the Elder ', brand: '', source: 'ai', serving: '1 can (12 oz)', qty: 1.5, grams: 532.5, calories: 315, protein_g: 3, carbs_g: 19.5, fat_g: 0, base: { calories: 210, protein_g: 2, carbs_g: 13, fat_g: 0, grams: 355 } })
+    expect(f).toEqual({ name: 'Pliny the Elder', brand: '', serving: '1 can (12 oz)', grams: 355, calories: 210, protein_g: 2, carbs_g: 13, fat_g: 0, origin: 'ai' })
+  })
+  it('foodFromEntry: an older entry with no base derives it from totals ÷ amount, rounded like a food; Quick add is not marked AI; a food entry keeps its brand', () => {
+    expect(foodFromEntry({ name: 'IPA', source: 'quick', calories: 400, protein_g: 4, carbs_g: 30, fat_g: 0, qty: 2 })).toEqual({ name: 'IPA', brand: '', serving: '', grams: null, calories: 200, protein_g: 2, carbs_g: 15, fat_g: 0, origin: null })
+    const odd = foodFromEntry({ name: 'X', brand: 'Brand', source: 'food', serving: '1 pint', calories: 100, protein_g: 1, carbs_g: 7, fat_g: 0.3, qty: 0.3, grams: 142 })
+    expect([odd.calories, odd.carbs_g, odd.fat_g, odd.grams, odd.brand]).toEqual([333, 23.3, 1, 473.3, 'Brand'])
+  })
+  it('foodFromEntry copes with junk: no qty, NaN, negative numbers', () => {
+    const f = foodFromEntry({ name: 'Old', calories: 'x', protein_g: NaN, carbs_g: -4, qty: -1 })
+    expect([f.calories, f.protein_g, f.carbs_g, f.fat_g]).toEqual([0, 0, 0, 0])
+  })
+  it('findDuplicate: same name and brand, any case, extra spaces; another brand or a looked-up food is not one', () => {
+    const foods = [{ id: 1, source: 'custom', name: 'Pliny  the Elder', brand: 'Russian River' }, { id: 2, source: 'off', name: 'Nutella', brand: '' }, { id: 3, name: 'Legacy', brand: '' }]
+    expect(findDuplicate(foods, ' pliny THE elder ', 'russian river').id).toBe(1)
+    expect(findDuplicate(foods, 'Pliny the Elder', 'Other')).toBeNull()
+    expect(findDuplicate(foods, 'Nutella', '')).toBeNull()
+    expect(findDuplicate(foods, 'legacy').id).toBe(3)
+    expect(findDuplicate(null, 'x')).toBeNull()
+  })
+  it('savedFoodBody: the confirmed name and numbers, the origin, the duplicate check; nothing else; the usual validation in words', () => {
+    const ok = savedFoodBody({ name: ' Beer ', brand: ' B ', serving: '1 can', grams: 355, calories: 210, protein_g: 2, carbs_g: 13, fat_g: null, origin: 'ai', image: 'x', photo: 'y' })
+    expect(ok.body).toEqual({ name: 'Beer', brand: 'B', serving: '1 can', grams: 355, per: { calories: 210, protein_g: 2, carbs_g: 13, fat_g: 0 }, origin: 'ai', checkDuplicate: true })
+    expect(savedFoodBody({ name: 'B', calories: 1 }, { choice: 'update' }).body.onDuplicate).toBe('update')
+    expect(savedFoodBody({ name: 'B', calories: 1 }).body.origin).toBeUndefined()
+    expect(savedFoodBody({ name: '  ', calories: 1 }).error).toBe('A food needs a name')
+    expect(savedFoodBody({ name: 'B', calories: null }).error).toMatch(/calories/)
+    expect(savedFoodBody({ name: 'B', calories: -5 }).ok).toBe(false)
+    expect(savedFoodBody({ name: 'B', calories: 1, protein_g: NaN }).ok).toBe(false)
+    expect(savedFoodBody({ name: 'B', calories: 1, grams: -1 }).ok).toBe(false)
+  })
+  it('savedFields / savedOverrides: the saved copy follows the row until it is edited, and only edits are kept', () => {
+    const row = { name: 'Fried egg', portion: '2 large', grams: 100, calories: 180, protein_g: 12.5, carbs_g: 1, fat_g: 14 }
+    const eff = savedFields(row, {})
+    expect(eff).toEqual({ name: 'Fried egg', brand: '', serving: '2 large', grams: 100, calories: 180, protein_g: 12.5, carbs_g: 1, fat_g: 14, origin: 'ai' })
+    const over = savedOverrides({}, eff, { ...eff, name: 'Pliny', calories: 210 })
+    expect(over).toEqual({ name: 'Pliny', calories: 210 })
+    expect(savedFields({ ...row, calories: 999, name: 'Changed' }, over)).toMatchObject({ name: 'Pliny', calories: 210, serving: '2 large', protein_g: 12.5 })
+    expect(savedFields({ ...row, grams: 120 }, savedOverrides({}, eff, { ...eff, grams: null })).grams).toBeNull()      // clearing the weight is an edit too
   })
 })

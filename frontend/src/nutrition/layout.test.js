@@ -46,6 +46,13 @@ describe('nutrition layout survives narrow screens and large text', () => {
     expect(rule('.nut-chart .row')).toMatch(/flex-wrap:wrap/)
     expect(rule('.nut-ah-sync .row')).toMatch(/flex-wrap:wrap/)
   })
+  it('the save-as-food box, the duplicate question and the prompt wrap and shrink; the question’s buttons wrap', () => {
+    expect(rule('.nut-savebox')).toMatch(/min-width:0/)
+    expect(rule('.nut-dup')).toMatch(/flex-wrap:wrap/)
+    expect(rule('.nut-dup-actions')).toMatch(/flex-wrap:wrap/)
+    expect(rule('.nut-saveprompt')).toMatch(/flex-wrap:wrap/)
+    expect(rule('.nut-saveprompt>span')).toMatch(/min-width:0/)
+  })
   it('long names and messages wrap instead of widening the page', () => {
     expect(rule('.nut')).toMatch(/min-width:0/)
     expect(css).toMatch(/\.nut-banner[^{]*\{[^}]*overflow-wrap:anywhere/)

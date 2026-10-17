@@ -113,8 +113,8 @@ describe('view — the screen is always explained', () => {
     expect(v.errors).toHaveLength(1)
     expect(v.cannotTell).toBe(false)
   })
-  it('names the sources', () => { expect(NAME).toEqual({ off: 'Open Food Facts', usda: 'USDA', fatsecret: 'FatSecret' }) })
-  it('FatSecret is the third source, asked for like the others', () => { expect(SOURCES).toEqual(['usda', 'off', 'fatsecret']) })
+  it('names the sources', () => { expect(NAME).toEqual({ mine: 'My foods', off: 'Open Food Facts', usda: 'USDA', fatsecret: 'FatSecret' }) })
+  it('your own saved foods are asked first, then the outside sources', () => { expect(SOURCES).toEqual(['mine', 'usda', 'off', 'fatsecret']) })
   it('FatSecret has the only answer: shown, and said to be the only source that had anything', () => {
     const fs = { state: 'ok', hits: [h('fatsecret', 'f', 1120)], count: 1 }
     const v = view({ usda: empty, off: empty, fatsecret: fs })

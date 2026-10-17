@@ -2,21 +2,40 @@
 // rather than by wording:
 //   · nothing reaches the diary until Save is pressed (the only addEntries call is in `save`);
 //   · the photo exists only in this component's memory (a shrunken JPEG, never stored);
+//   · "Save to My foods" (off by default, per item) saves the NAME AND NUMBERS shown in its own fields as a reusable
+//     food; it never changes what is logged, and the photo is never part of it;
 //   · whenever the AI cannot help — cap, timeout, auth, down, unreadable — there is a way on to
 //     logging by hand, with whatever the person already typed carried over.
 import { useEffect, useRef, useState } from 'react'
 import Icon from '../components/Icon.jsx'
-import { Button, NumberField, SelectRow, TextArea, TextField } from '../components/ui.jsx'
+import { Button, NumberField, SelectRow, Switch, TextArea, TextField } from '../components/ui.jsx'
 import { useUI } from '../store/useUI.js'
 import { nt } from './i18n.js'
 import * as nutri from './api.js'
 import { downscaleToJpeg } from './image.js'
 import { CONFIDENCE_LABEL, allowanceText, blankRow, draftRows, draftToEntries, edited, failureAdvice, rowsTotals } from './ai.js'
-import { MEALS, MEAL_LABEL, macroLine } from './diary.js'
-import { MacroFields } from './sheets.jsx'
+import { MEALS, MEAL_LABEL, findDuplicate, macroLine, savedFields, savedFoodBody, savedOverrides } from './diary.js'
+import { DuplicateChoice, MacroFields, SaveFoodFields } from './sheets.jsx'
 import { confirmSheet } from '../sheets.jsx'
 
 const toast = m => useUI.getState().toast(m)
+
+/** "Save to My foods" for one reviewed item: off until turned on, then the saved name, brand, serving and numbers, editable apart from what is logged. */
+function SaveBox({ row, s, onChange }) {
+  const eff = savedFields(row, s.over)
+  return <div className="nut-savebox">
+    <div className="row between">
+      <span>{nt('Save to My foods')}</span>
+      <Switch checked={s.on} onChange={on => onChange({ on, ...(on ? {} : { dup: null, choice: null }) })} aria-label={nt('Save {0} to My foods', row.name || nt('this item'))} />
+    </div>
+    {s.on && <>
+      <div className="muted small nut-savebox-hint">{nt('Saves this name and these numbers, for one serving, so you can log it again in one tap without a photo. What you log now does not change.')}</div>
+      <SaveFoodFields v={eff} set={nv => onChange({ over: savedOverrides(s.over, eff, nv), dup: null, choice: null })} />
+      {s.dup && <><div style={{ height: 8 }} /><DuplicateChoice existing={s.dup} onChoose={choice => onChange({ choice })} /></>}
+      {s.choice && <div className="muted small" style={{ marginTop: 6 }}>{s.choice === 'update' ? nt('The saved food will be updated.') : nt('It will be saved as a new food.')}</div>}
+    </>}
+  </div>
+}
 
 function Review({ draft, date, initialMeal, onSaved, onDiscard, close }) {
   const [rows, setRows] = useState(() => draftRows(draft))
@@ -26,13 +45,47 @@ function Review({ draft, date, initialMeal, onSaved, onDiscard, close }) {
   const next = useRef(rows.length)
   const totals = rowsTotals(rows)
   const change = (i, patch) => setRows(rs => rs.map((r, j) => (j === i ? { ...r, ...patch } : r)))
+  // Per item: should it also be saved as a food, what it would be saved as (only what differs from the row), and the
+  // answer to "you already have this".   saves[key] = { on, over, dup, choice }
+  const [saves, setSaves] = useState({})
+  const saveOf = r => saves[r.key] || { on: false, over: {}, dup: null, choice: null }
+  const patchSave = (r, patch) => setSaves(m => ({ ...m, [r.key]: { ...saveOf(r), ...patch } }))
 
   const save = async () => {
     const r = draftToEntries(rows, { date, meal, confidence: draft.confidence })
     if (!r.ok) { toast(nt(r.error)); return }
+    // The foods to save are checked first, and any "already saved" is asked about before anything is written.
+    const wanted = []
+    for (const [i, row] of rows.entries()) {
+      const s = saveOf(row)
+      if (!s.on) continue
+      const fb = savedFoodBody(savedFields(row, s.over), { choice: s.choice })
+      if (!fb.ok) { toast(`${row.name || nt('Item {0}', i + 1)}: ${nt(fb.error)}`); return }
+      wanted.push({ i, row, body: fb.body })
+    }
     setBusy(true)
-    try { await nutri.addEntries(r.body); onSaved(); close(); toast(nt('Saved to {0}', nt(MEAL_LABEL[meal]).toLowerCase())) }
-    catch (e) { toast(e.message); setBusy(false) }
+    try {
+      const unanswered = []
+      if (wanted.length) {
+        const mine = await nutri.listFoods('custom', '')
+        for (const w of wanted) {
+          const s = saveOf(w.row)
+          const dup = findDuplicate(mine.foods, w.body.name, w.body.brand)
+          if (dup && !s.choice) { unanswered.push(w.row); patchSave(w.row, { dup }) }
+        }
+      }
+      if (unanswered.length) { toast(nt('Choose what to do about the food you already have, then press Save again.')); setBusy(false); return }
+      const out = await nutri.addEntries(r.body)
+      const failed = []
+      for (const w of wanted) {
+        try { await nutri.createFood(w.body) } catch (e) { failed.push({ w, message: e.message }) }
+      }
+      const savedIdx = new Set(wanted.filter(w => !failed.some(f => f.w === w)).map(w => w.i))
+      // Entries that were not also saved as a food are offered "save this for next time" on the diary.
+      onSaved((out.entries || []).filter((_, i) => !savedIdx.has(i)))
+      close()
+      toast(failed.length ? nt('Saved to the diary, but “{0}” could not be saved as a food: {1}', failed[0].w.body.name, failed[0].message) : savedIdx.size ? nt('Saved to {0} and to My foods', nt(MEAL_LABEL[meal]).toLowerCase()) : nt('Saved to {0}', nt(MEAL_LABEL[meal]).toLowerCase()))
+    } catch (e) { toast(e.message); setBusy(false) }
   }
 
   return <>
@@ -57,6 +110,7 @@ function Review({ draft, date, initialMeal, onSaved, onDiscard, close }) {
         <label className="nut-field"><span>{nt('Weight')}</span><span className="nut-input"><NumberField nullable value={r.grams} onChange={g => change(i, { grams: g })} aria-label={nt('Weight in grams')} /><i>g</i></span></label>
       </div>
       <MacroFields v={r} set={nv => change(i, nv)} />
+      <SaveBox row={r} s={saveOf(r)} onChange={p => patchSave(r, p)} />
     </div>)}
     <Button size="sm" icon="plus" onClick={() => setRows(rs => [...rs, blankRow(next.current++)])}>{nt('Add an item')}</Button>
 

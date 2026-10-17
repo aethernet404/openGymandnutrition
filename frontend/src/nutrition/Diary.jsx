@@ -7,9 +7,9 @@ import { todayISO } from '../lib/format.js'
 import { dateLocale } from '../lib/i18n.js'
 import { nt } from './i18n.js'
 import * as nutri from './api.js'
-import { openAddSheet, openEditEntry } from './sheets.jsx'
+import { openAddSheet, openEditEntry, openSaveFood } from './sheets.jsx'
 import { useStore } from '../store/useStore.js'
-import { EMPTY_TOTALS, MACRO_KEYS, MACRO_LABEL, MEALS, MEAL_LABEL, burnedOf, fraction, goalWithEatBack, macroLine, mealForHour, netOf, relativeDay, remaining, shiftISO, signed, sparkPath, trim, updatedText, validISO, weightText, weightTrend, workoutLine } from './diary.js'
+import { EMPTY_TOTALS, MACRO_KEYS, foodFromEntry, MACRO_LABEL, MEALS, MEAL_LABEL, burnedOf, fraction, goalWithEatBack, macroLine, mealForHour, netOf, relativeDay, remaining, shiftISO, signed, sparkPath, trim, updatedText, validISO, weightText, weightTrend, workoutLine } from './diary.js'
 import './nutrition.css'
 
 const nf = n => Math.round(n || 0).toLocaleString(dateLocale())
@@ -146,6 +146,11 @@ export default function Diary() {
     return () => { live = false }
   }, [today])
 
+  // "Save this as a food for next time?" for AI entries just saved; in memory only, gone when dismissed or saved.
+  const [prompts, setPrompts] = useState([])
+  const afterAdd = made => { load(); if (Array.isArray(made) && made.length) setPrompts(p => [...p, ...made.filter(e => e && e.source === 'ai')].slice(-5)) }
+  const dismiss = id => setPrompts(p => p.filter(e => e.id !== id))
+
   const { day, status } = state
   const byMeal = m => (day?.entries || []).filter(e => e.meal === m)
   const defaultMeal = mealForHour(new Date().getHours())
@@ -183,11 +188,17 @@ export default function Diary() {
       <ActivityCard activity={day.activity} unit={unit} />
       <WeightCard weight={weight} unit={unit} onSetup={() => nav('/nutrition/health')} />
       {status === 'error' && <div className="small" style={{ color: 'var(--red)', margin: '0 4px 10px' }}>{nt('Could not refresh: {0}', state.error)} <button className="linkbtn" onClick={load}>{nt('Try again')}</button></div>}
+      {prompts.filter(p => (day.entries || []).some(e => e.id === p.id)).map(p => <div key={p.id} className="nut-banner info nut-saveprompt">
+        <Icon name="sparkles" />
+        <span>{nt('Save “{0}” as a food for next time?', p.name)}</span>
+        <button className="linkbtn" onClick={() => openSaveFood({ initial: foodFromEntry(p), onSaved: () => dismiss(p.id) })}>{nt('Save as food')}</button>
+        <button className="iconbtn" onClick={() => dismiss(p.id)} aria-label={nt('Dismiss')}><Icon name="xmark" /></button>
+      </div>)}
       {MEALS.map(m => <MealCard key={m} meal={m} entries={byMeal(m)} totals={day.byMeal?.[m] || EMPTY_TOTALS}
-        onAdd={() => openAddSheet({ date, meal: m, onSaved: load })}
+        onAdd={() => openAddSheet({ date, meal: m, onSaved: afterAdd })}
         onEdit={e => openEditEntry({ entry: e, date, onSaved: load })} />)}
       {!day.entries.length && <div className="nut-center muted small" style={{ margin: '6px 0 14px' }}>
-        <Button variant="primary" icon="plus" onClick={() => openAddSheet({ date, meal: defaultMeal, onSaved: load })}>{nt('Log your first food')}</Button>
+        <Button variant="primary" icon="plus" onClick={() => openAddSheet({ date, meal: defaultMeal, onSaved: afterAdd })}>{nt('Log your first food')}</Button>
       </div>}
     </>}
   </div>

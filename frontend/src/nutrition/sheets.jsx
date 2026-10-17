@@ -14,7 +14,7 @@ import AiLog from './AiLog.jsx'
 import { allowanceText, unavailableText } from './ai.js'
 import { nt } from './i18n.js'
 import * as nutri from './api.js'
-import { MACRO_LABEL, MEALS, MEAL_LABEL, amountPatch, entryBase, foodBody, gramsForQty, macroLine, qtyForGramsOf, quickBody, scaleEntry, scaleFood, trim } from './diary.js'
+import { MACRO_LABEL, MEALS, MEAL_LABEL, amountPatch, entryBase, foodBody, foodFromEntry, gramsForQty, macroLine, qtyForGramsOf, quickBody, savedFoodBody, scaleEntry, scaleFood, trim } from './diary.js'
 import { FATSECRET_CREDIT, FATSECRET_URL, NO_RETRY, SOURCE_LABEL, SOURCE_SHORT, barcodeOf, defaultBase, gramsOf, hitLine, qtyForGrams, snapshotOf, sourceNotes } from './lookup.js'
 import { NO_CODE_TEXT, gtinCheckOk, lookupCode, scanMethods } from './barcode.js'
 import * as finder from './search.js'
@@ -35,6 +35,73 @@ export function MacroFields({ v, set, disabled, caloriesLabel = 'Calories' }) {
     {cell('calories', caloriesLabel, 'kcal')}{cell('protein_g', 'Protein', 'g')}{cell('carbs_g', 'Carbs', 'g')}{cell('fat_g', 'Fat', 'g')}
   </div>
 }
+
+/* ------------------------------ save as a reusable food ------------------------------ */
+
+/**
+ * The fields of a food to save: name, optional brand, the serving's label and weight, and the numbers for ONE serving.
+ * Controlled; `v` is { name, brand, serving, grams, calories, protein_g, carbs_g, fat_g }.
+ */
+export function SaveFoodFields({ v, set }) {
+  const macros = { calories: v.calories, protein_g: v.protein_g, carbs_g: v.carbs_g, fat_g: v.fat_g }
+  return <div className="nut-savefields">
+    <TextField value={v.name} maxLength={120} placeholder={nt('Name, e.g. Pliny the Elder, 12 oz can')} onChange={e => set({ ...v, name: e.target.value })} aria-label={nt('Saved food name')} />
+    <div style={{ height: 8 }} />
+    <TextField value={v.brand} maxLength={60} placeholder={nt('Brand (optional)')} onChange={e => set({ ...v, brand: e.target.value })} aria-label={nt('Saved food brand')} />
+    <div className="nut-section-t">{nt('One serving')}</div>
+    <div className="nut-fields">
+      <label className="nut-field"><span>{nt('Serving')}</span><span className="nut-input"><TextField value={v.serving} maxLength={60} placeholder={nt('e.g. 1 can (12 oz)')} onChange={e => set({ ...v, serving: e.target.value })} aria-label={nt('Saved serving')} /></span></label>
+      <label className="nut-field"><span>{nt('Weight')}</span><span className="nut-input"><NumberField nullable value={v.grams} onChange={n => set({ ...v, grams: n })} aria-label={nt('Saved serving weight')} /><i>g</i></span></label>
+    </div>
+    <div style={{ height: 8 }} />
+    <MacroFields v={macros} set={m => set({ ...v, ...m })} />
+  </div>
+}
+
+/** Already saved under this name and brand: the two honest choices, inline (no popup). */
+export function DuplicateChoice({ existing, onChoose, busy = false }) {
+  return <div className="nut-banner warn nut-dup" role="alert">
+    <Icon name="warning" />
+    <span>{nt('You already have “{0}” saved ({1}, {2} kcal).', existing.name, existing.serving?.label || nt('1 serving'), existing.per?.calories ?? '?')}</span>
+    <div className="nut-dup-actions">
+      <Button size="sm" onClick={() => onChoose('update')} disabled={busy}>{nt('Update the saved food')}</Button>
+      <Button size="sm" onClick={() => onChoose('new')} disabled={busy}>{nt('Save as a new one')}</Button>
+    </div>
+  </div>
+}
+
+function SaveFoodSheet({ initial, onSaved, close }) {
+  const [f, setF] = useState({ name: initial.name, brand: initial.brand || '', serving: initial.serving || '', grams: initial.grams ?? null, calories: initial.calories, protein_g: initial.protein_g, carbs_g: initial.carbs_g, fat_g: initial.fat_g })
+  const [dup, setDup] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const save = async choice => {
+    const r = savedFoodBody({ ...f, origin: initial.origin }, { choice })
+    if (!r.ok) { toast(nt(r.error)); return }
+    setBusy(true)
+    try {
+      const out = await nutri.createFood(r.body)
+      onSaved?.(out.food); close(); toast(out.updated ? nt('Saved food updated') : nt('Saved to My foods'))
+    } catch (e) {
+      if (e.status === 409 && e.data?.code === 'duplicate') { setDup(e.data.existing); setBusy(false); return }
+      fail(e); setBusy(false)
+    }
+  }
+  return <>
+    <h3>{nt('Save as a food')}</h3>
+    <div className="muted small" style={{ margin: '0 0 10px' }}>
+      {initial.origin === 'ai' ? nt('An AI estimate you confirmed. Only this name and these numbers are saved, never the photo. ') : ''}{nt('Next time, tap it in Add and log it with the servings stepper.')}
+    </div>
+    <SaveFoodFields v={f} set={nv => { setF(nv); setDup(null) }} />
+    {dup && <><div style={{ height: 10 }} /><DuplicateChoice existing={dup} onChoose={save} busy={busy} /></>}
+    <div style={{ height: 14 }} />
+    {!dup && <Button variant="primary" onClick={() => save(null)} disabled={busy}>{nt('Save to My foods')}</Button>}
+    <div style={{ height: 4 }} />
+    <Button variant="ghost" className="dim" onClick={close}>{nt('Cancel')}</Button>
+  </>
+}
+
+/** Open the Save-as-a-food sheet for `initial` (see diary.js foodFromEntry). `onSaved(food)` runs after the server accepted it. */
+export const openSaveFood = props => useUI.getState().openSheet(close => <SaveFoodSheet {...props} close={close} />)
 
 /* ------------------------------ add to a meal ------------------------------ */
 
@@ -98,7 +165,7 @@ function Portion({ name, brand, bases, meal, onBack, onAdd, busy, tag, credit = 
 }
 
 const basesOfFood = f => [{ label: f.serving.label, grams: f.serving.grams, per: f.per }]
-const tagOfFood = f => (f.source === 'off' || f.source === 'usda' || f.source === 'fatsecret' ? SOURCE_SHORT[f.source] : null)
+const tagOfFood = f => (f.source === 'off' || f.source === 'usda' || f.source === 'fatsecret' ? SOURCE_SHORT[f.source] : f.origin === 'ai' ? 'AI estimate' : null)
 
 function FoodPick({ date, meal, onSaved, close }) {
   const [scope, setScope] = useState('recent')
@@ -136,7 +203,7 @@ function FoodPick({ date, meal, onSaved, close }) {
       </div>}
       {foods?.map(f => <button key={f.id} className="nut-pick" onClick={() => setPicked(f)}>
         <span className="nut-pick-m"><span className="nut-pick-t">{f.name}</span><span className="nut-pick-s">{f.brand ? f.brand + ' · ' : ''}{f.serving.label} · {macroLine(f.per)}</span></span>
-        <span className="nut-kcal">{f.per.calories}</span>
+        <span className="nut-pick-r"><span className="nut-kcal">{f.per.calories}</span>{f.origin === 'ai' && <span className="tag nut-src">{nt('AI estimate')}</span>}</span>
       </button>)}
     </div>
   </>
@@ -148,7 +215,7 @@ function HitRow({ hit, onPick }) {
   const b = defaultBase(hit)
   return <button className="nut-pick" onClick={() => onPick(hit)}>
     <span className="nut-pick-m"><span className="nut-pick-t">{hit.name}</span><span className="nut-pick-s">{hitLine(hit)} · {macroLine(b.per)}</span></span>
-    <span className="nut-pick-r"><span className="nut-kcal">{b.per.calories}</span><span className="tag nut-src">{SOURCE_SHORT[hit.source]}</span></span>
+    <span className="nut-pick-r"><span className="nut-kcal">{b.per.calories}</span><span className="tag nut-src">{nt(SOURCE_SHORT[hit.source])}</span>{hit.origin === 'ai' && <span className="tag nut-src">{nt('AI estimate')}</span>}</span>
   </button>
 }
 
@@ -215,6 +282,7 @@ function ScanPanel({ methods, onCode, onTyped }) {
    source really answered with nothing — "nothing found" with the ways to log it anyway. */
 function SearchResults({ per, q, slow, isAdmin, ai, onPick, onRetry, onDescribe, onQuick }) {
   const v = finder.view(per)
+  const loadingOutside = v.loading.filter(id => id !== 'mine')           // the person's own foods answer at once; the spinner is about the outside sources
   const aiOk = !!ai && ai.available && ai.remaining > 0
   const info = sourceNotes(Object.fromEntries(v.skipped.map(id => [id, { ok: false, skipped: per[id].why }])), { admin: isAdmin })
   const ways = <div className="nut-ways">
@@ -233,9 +301,9 @@ function SearchResults({ per, q, slow, isAdmin, ai, onPick, onRetry, onDescribe,
       {v.results.map(h => <HitRow key={h.source + h.ext + h.bases[0].label} hit={h} onPick={onPick} />)}
     </div>}
     {v.results.some(h => h.source === 'fatsecret') && <div className="nut-credit-row"><FatSecretCredit /></div>}
-    {v.loading.length > 0 && <div className="nut-searching" role="status">
+    {loadingOutside.length > 0 && <div className="nut-searching" role="status">
       <div className="nut-spinner sm" aria-hidden="true" />
-      <span>{nt(slow ? (v.loading.length > 1 ? '{0} are slow right now — still waiting…' : '{0} is slow right now — still waiting…') : 'Searching {0}…', andList(v.loading.map(id => finder.NAME[id])))}</span>
+      <span>{nt(slow ? (loadingOutside.length > 1 ? '{0} are slow right now — still waiting…' : '{0} is slow right now — still waiting…') : 'Searching {0}…', andList(loadingOutside.map(id => finder.NAME[id])))}</span>
     </div>}
     {v.nothingFound && <div className="nut-nothing">
       <div>{nt('Nothing found for “{0}”.', q)}</div>
@@ -306,12 +374,13 @@ function SearchTab({ date, meal, ai, onSaved, onDescribe, onQuick, close }) {
   const add = async (qty, base) => {
     setBusy(true)
     try {
-      await nutri.addEntries({ date, meal, source: 'food', qty, food: snapshotOf(picked, base) })
+      // One of the person's own saved foods is logged by its id, like from My foods: no snapshot, no lookup, no AI.
+      await nutri.addEntries(picked.source === 'mine' ? { date, meal, source: 'food', foodId: picked.ext, qty } : { date, meal, source: 'food', qty, food: snapshotOf(picked, base) })
       onSaved(); close(); toast(nt('Added'))
     } catch (e) { fail(e); setBusy(false) }
   }
 
-  if (picked) return <Portion name={picked.name} brand={picked.brand} bases={picked.bases} meal={meal} tag={SOURCE_LABEL[picked.source]} credit={picked.source === 'fatsecret'} busy={busy} onBack={() => setPicked(null)} onAdd={add} />
+  if (picked) return <Portion name={picked.name} brand={picked.brand} bases={picked.bases} meal={meal} tag={picked.origin === 'ai' ? nt('AI estimate') : SOURCE_LABEL[picked.source]} credit={picked.source === 'fatsecret'} busy={busy} onBack={() => setPicked(null)} onAdd={add} />
 
   const r = bc?.result
   return <>
@@ -444,6 +513,9 @@ function EditEntry({ entry, date, onSaved, close }) {
     <div style={{ height: 14 }} />
     <Button variant="primary" onClick={save} disabled={busy}>{nt('Save')}</Button>
     <div style={{ height: 8 }} />
+    <Button icon="plus" onClick={() => openSaveFood({ initial: foodFromEntry({ ...entry, name }) })}>{nt('Save as food')}</Button>
+    <div className="muted small" style={{ margin: '4px 2px 0' }}>{nt('Saves one serving of this entry, as stored, to My foods.')}</div>
+    <div style={{ height: 8 }} />
     <Button variant="ghost" style={{ color: 'var(--red)' }} icon="trash" onClick={remove}>{nt('Delete')}</Button>
     <div style={{ height: 4 }} />
     <Button variant="ghost" className="dim" onClick={close}>{nt('Cancel')}</Button>
@@ -475,7 +547,7 @@ function FoodSheet({ food, prefill, onSaved, close }) {
   })
 
   return <>
-    <h3>{food ? nt('Food') : nt('New food')}</h3>
+    <h3>{food ? nt('Food') : nt('New food')}{food?.origin === 'ai' && <span className="tag nut-src nut-ai-badge">{nt('AI estimate')}</span>}</h3>
     {readOnly && <div className="muted small" style={{ marginBottom: 10 }}>{nt('This food came from a lookup, so its numbers cannot be edited.')}</div>}
     <TextField value={f.name} maxLength={120} placeholder={nt('Name')} disabled={readOnly} onChange={e => setF({ ...f, name: e.target.value })} aria-label={nt('Name')} />
     <div style={{ height: 8 }} />

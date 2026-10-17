@@ -22,6 +22,7 @@ import crypto from 'node:crypto';
 import { atomicWrite } from '../durable.js';
 import { dataDir } from './config.js';
 import { MACROS, LIMITS, round } from './validate.js';
+import { relevance } from './rank.js';
 
 export class NutritionDataError extends Error {}
 export class NutritionLimitError extends Error {}
@@ -194,6 +195,12 @@ export function addFood(d, input) {
   return f;
 }
 
+/** The saved (custom) food with this name and brand, ignoring case and extra spaces, or null. */
+export function findSavedFood(d, name, brand = '') {
+  const n = norm(name), b = norm(brand);
+  return Object.values(d.foods).find(f => f.source === 'custom' && norm(f.name) === n && norm(f.brand) === b) || null;
+}
+
 /** Remember a food that came from search or the AI, as a recent. Same food again → same row. */
 export function noteRecent(d, input) {
   const candidate = { source: 'custom', ext: null, ...input };
@@ -284,4 +291,24 @@ export async function reserveAi(uid, limit) {
  *  runtime was missing or the credential refused). A call that ran and failed stays counted. */
 export function refundAi(uid) {
   return mutate(uid, d => { if (d.ai?.date === todayUTC() && d.ai.count > 0) d.ai.count -= 1; });
+}
+
+/**
+ * The person's saved (custom) foods that contain every word typed, shaped like a lookup hit so the app can merge
+ * them with the other sources, with a rank above every outside source ("My food" always comes first). A saved food
+ * is one serving, so it has one base. Closer names first; favourites and often-used ones break ties.
+ */
+export function searchSaved(d, q, limit = 10) {
+  const out = [];
+  for (const f of Object.values(d.foods)) {
+    if (f.source !== 'custom') continue;
+    const r = relevance(q, f.name, f.brand);
+    if (!r.full) continue;
+    out.push({
+      source: 'mine', kind: f.origin === 'ai' ? 'ai' : 'mine', origin: f.origin || null, ext: f.id, name: f.name, brand: f.brand || '',
+      bases: [{ label: f.serving?.label || '1 serving', grams: f.serving?.grams ?? null, per: f.per }],
+      rank: 5000 + r.score + (f.favorite ? 20 : 0) + Math.min(10, f.useCount || 0)
+    });
+  }
+  return out.sort((a, b) => b.rank - a.rank).slice(0, limit);
 }

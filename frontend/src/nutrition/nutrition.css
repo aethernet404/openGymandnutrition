@@ -182,3 +182,15 @@
 /* FatSecret credit: required wherever their results are shown */
 .nut-credit-row{margin:8px 2px 0;font-size:12px;text-align:end}
 .nut-credit{color:var(--label-2);text-decoration:underline;text-underline-offset:2px;overflow-wrap:anywhere}
+
+/* Save as a food: fields, duplicate choice, the prompt after an AI entry. All in the page flow, none out of it. */
+.nut-savefields{min-width:0}
+.nut-savebox{margin-top:10px;padding:10px 12px;border-radius:12px;background:var(--surface-2);min-width:0}
+.nut-savebox .row{gap:10px}
+.nut-savebox-hint{margin:6px 0 10px;overflow-wrap:anywhere}
+.nut-dup{flex-wrap:wrap}
+.nut-dup>span{flex:1 1 200px;min-width:0}
+.nut-dup-actions{display:flex;flex-wrap:wrap;gap:8px;flex:1 1 100%}
+.nut-saveprompt{flex-wrap:wrap;align-items:center;margin:0 0 10px}
+.nut-saveprompt>span{flex:1 1 180px;min-width:0;overflow-wrap:anywhere}
+.nut-ai-badge{margin-inline-start:8px;vertical-align:middle}

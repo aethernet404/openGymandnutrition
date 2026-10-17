@@ -6,8 +6,9 @@
 // one again) or switched off. The screen is decided from that status by `view()` — one pure
 // function — so that "a blank list with no reason" is not a state it can reach.
 
-export const SOURCES = ['usda', 'off', 'fatsecret']
-export const NAME = { off: 'Open Food Facts', usda: 'USDA', fatsecret: 'FatSecret' }
+// 'mine' is the person's own saved foods: answered by the server from their own file, instantly, ahead of everything else.
+export const SOURCES = ['mine', 'usda', 'off', 'fatsecret']
+export const NAME = { mine: 'My foods', off: 'Open Food Facts', usda: 'USDA', fatsecret: 'FatSecret' }
 const MAX_SHOWN = 40
 
 export const fresh = () => Object.fromEntries(SOURCES.map(id => [id, { state: 'loading', hits: [] }]))

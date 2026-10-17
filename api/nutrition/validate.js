@@ -9,6 +9,8 @@
 export const MEALS = ['breakfast', 'lunch', 'dinner', 'snack'];
 export const SOURCES = ['manual', 'quick', 'food', 'ai'];
 export const FOOD_SOURCES = ['custom', 'off', 'usda', 'fatsecret', 'ai'];
+// Where a saved (custom) food's numbers came from, beyond "typed by hand": 'ai' = an AI estimate the person confirmed and saved.
+export const FOOD_ORIGINS = ['ai'];
 export const CONFIDENCE = ['low', 'medium', 'high'];
 
 export const LIMITS = {
@@ -106,6 +108,10 @@ export function food(body, { partial = false } = {}) {
   if (body.source !== undefined) {
     if (!FOOD_SOURCES.includes(body.source)) return bad(`source must be one of ${FOOD_SOURCES.join(', ')}`);
     out.source = body.source;
+  }
+  if (body.origin !== undefined) {
+    if (body.origin !== null && !FOOD_ORIGINS.includes(body.origin)) return bad(`origin must be one of ${FOOD_ORIGINS.join(', ')}`);
+    out.origin = body.origin;
   }
   if (body.ext !== undefined) out.ext = body.ext == null ? null : clean(body.ext, LIMITS.ext) || null;
   if (body.favorite !== undefined) {

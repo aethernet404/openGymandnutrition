@@ -290,8 +290,8 @@ const NUTELLA = { source: 'off', kind: 'off', rank: 1180, ext: '3017620422003', 
 const wait = ms => act(async () => { await new Promise(r => setTimeout(r, ms)) })
 // The app asks for each source separately; this answers each the way the server would.
 //   spec: an array of hits | 'skipped' (no USDA key) | { fail, kind } | an Error (the request itself failed)
-const mockSearch = ({ off = [], usda = 'skipped', fatsecret = 'skipped' } = {}) => m.api.searchFoods.mockImplementation(async (q, source) => {
-  const spec = source === 'off' ? off : source === 'fatsecret' ? fatsecret : usda
+const mockSearch = ({ off = [], usda = 'skipped', fatsecret = 'skipped', mine = [] } = {}) => m.api.searchFoods.mockImplementation(async (q, source) => {
+  const spec = source === 'off' ? off : source === 'fatsecret' ? fatsecret : source === 'mine' ? mine : usda
   if (spec instanceof Error) throw spec
   if (spec === 'skipped') return { q, results: [], sources: { [source]: { ok: false, skipped: 'no-key' } } }
   if (spec && spec.fail) return { q, results: [], sources: { [source]: { ok: false, kind: spec.kind || 'down', error: spec.fail } } }
@@ -310,7 +310,7 @@ describe('search, portions and barcodes', () => {
     const s = await openSearch()
     expect(s.el.textContent).toContain('Search Open Food Facts, USDA and FatSecret')
     await typeSearch(s, 'nutella')
-    expect(m.api.searchFoods).toHaveBeenCalledTimes(3)                       // one request per source, started together
+    expect(m.api.searchFoods).toHaveBeenCalledTimes(4)                       // one request per source, started together
     expect(m.api.searchFoods).toHaveBeenCalledWith('nutella', 'off')
     expect(m.api.searchFoods).toHaveBeenCalledWith('nutella', 'usda')
     expect(s.el.textContent).toContain('Nutella')
@@ -328,7 +328,7 @@ describe('search, portions and barcodes', () => {
     await setValue(s.el.querySelector('input[placeholder="Search foods"]'), 'nut')
     await setValue(s.el.querySelector('input[placeholder="Search foods"]'), 'nutella')
     await wait(520)
-    expect(m.api.searchFoods).toHaveBeenCalledTimes(3)                       // 'nutella' once, for each source
+    expect(m.api.searchFoods).toHaveBeenCalledTimes(4)                       // 'nutella' once, for each source
     expect(new Set(m.api.searchFoods.mock.calls.map(c => c[0]))).toEqual(new Set(['nutella']))
   })
 
@@ -346,10 +346,10 @@ describe('search, portions and barcodes', () => {
     await typeSearch(s, 'hazelnut spread')
     expect(s.el.textContent).toContain('Open Food Facts did not answer in time')
     expect(s.el.textContent).toContain('Hazelnut spread')
-    expect(m.api.searchFoods).toHaveBeenCalledTimes(3)
+    expect(m.api.searchFoods).toHaveBeenCalledTimes(4)
     mockSearch({ off: [{ ...NUTELLA, name: 'Hazelnut spread', ext: '2' }], usda: [{ ...NUTELLA, source: 'usda', kind: 'sr', ext: '1', name: 'Hazelnut spread', rank: 2100 }] })
     await click(byText('button', 'Retry'))
-    expect(m.api.searchFoods).toHaveBeenCalledTimes(4)
+    expect(m.api.searchFoods).toHaveBeenCalledTimes(5)
     expect(m.api.searchFoods.mock.calls.at(-1)).toEqual(['hazelnut spread', 'off'])     // only the one that failed
     expect(s.el.textContent).not.toContain('did not answer in time')
     expect(s.el.querySelectorAll('.nut-pick')).toHaveLength(2)
@@ -357,7 +357,7 @@ describe('search, portions and barcodes', () => {
 
   it('results appear as each source answers: USDA is on screen while Open Food Facts is still working', async () => {
     let finishOff
-    m.api.searchFoods.mockImplementation((q, source) => (source === 'fatsecret' ? Promise.resolve({ q, results: [], sources: { fatsecret: { ok: false, skipped: 'no-key' } } }) : source === 'off'
+    m.api.searchFoods.mockImplementation((q, source) => (source === 'fatsecret' ? Promise.resolve({ q, results: [], sources: { fatsecret: { ok: false, skipped: 'no-key' } } }) : source === 'mine' ? Promise.resolve({ q, results: [], sources: { mine: { ok: true, count: 0 } } }) : source === 'off'
       ? new Promise(r => { finishOff = () => r({ q, results: [NUTELLA], sources: { off: { ok: true, count: 1 } } }) })
       : Promise.resolve({ q, results: [{ ...NUTELLA, source: 'usda', kind: 'sr', ext: '1', name: 'Hazelnut spread', rank: 2100 }], sources: { usda: { ok: true, count: 1 } } })))
     const s = await openSearch()
@@ -1605,7 +1605,7 @@ describe('FatSecret in the app', () => {
     mockSearch({ off: [], usda: [], fatsecret: [FS_HIT] })
     const s = await openSearch()
     await typeSearch(s, '7-eleven taquitos')
-    expect(new Set(m.api.searchFoods.mock.calls.map(c => c[1]))).toEqual(new Set(['usda', 'off', 'fatsecret']))
+    expect(new Set(m.api.searchFoods.mock.calls.map(c => c[1]))).toEqual(new Set(['mine', 'usda', 'off', 'fatsecret']))
     expect(s.el.textContent).toContain('Taquitos, Beef & Cheese')
     expect(s.el.querySelector('.nut-pick .nut-src').textContent).toBe('FatSecret')
     const a = credit(s.el)
@@ -1759,5 +1759,277 @@ describe('FatSecret in the app', () => {
     await mount(<Goals />)
     expect(text()).not.toContain('FatSecret food search')
     expect(m.api.getAdmin).not.toHaveBeenCalled()
+  })
+})
+
+/* ------------------------------ saving estimates and entries as reusable foods ------------------------------ */
+
+describe('Save as a food', () => {
+  const SAVED_ENTRIES = { entries: [{ id: 'e1', name: 'Fried egg', source: 'ai', meal: 'lunch', calories: 180, protein_g: 12.5, carbs_g: 1, fat_g: 14, qty: 1, serving: '2 large' }, { id: 'e2', name: 'Toast', source: 'ai', meal: 'lunch', calories: 80, protein_g: 3, carbs_g: 14, fat_g: 1, qty: 1, serving: '1 slice' }] }
+  async function review(onSaved = vi.fn()) {
+    m.api.analyze.mockResolvedValue({ draft: DRAFT, ai: AI })
+    m.api.addEntries.mockResolvedValue(SAVED_ENTRIES)
+    m.api.createFood.mockResolvedValue({ food: { id: 'f1' } })
+    m.api.listFoods.mockResolvedValue({ foods: [] })
+    openAddSheet({ date: '2026-10-12', meal: 'lunch', onSaved })
+    const s = await showSheet()
+    await click(byText('button', 'Describe'))
+    await setValue(s.el.querySelector('textarea'), 'two eggs and toast')
+    await click(byText('button', 'Estimate calories & macros'))
+    return { s, onSaved }
+  }
+  const switches = s => [...s.el.querySelectorAll('.nut-savebox [role="switch"]')]
+  const box = (s, i) => s.el.querySelectorAll('.nut-savebox')[i]
+  const field = (el, label) => el.querySelector(`input[aria-label="${label}"]`)
+
+  it('review: every item has a "Save to My foods" switch, off by default, and with all off nothing extra is called', async () => {
+    const { s } = await review()
+    expect(switches(s)).toHaveLength(2)
+    expect(switches(s).every(sw => sw.getAttribute('aria-checked') === 'false')).toBe(true)
+    expect(s.el.querySelector('.nut-savebox input')).toBeNull()                       // nothing to fill in until it is turned on
+    await click(byText('button', 'Save to diary'))
+    expect(m.api.addEntries).toHaveBeenCalledTimes(1)
+    expect(m.api.createFood).not.toHaveBeenCalled()
+    expect(m.api.listFoods).not.toHaveBeenCalled()
+  })
+
+  it('review: turn it on, edit the saved name, brand, serving and numbers; the diary entry is exactly what was reviewed', async () => {
+    const { s, onSaved } = await review()
+    await click(switches(s)[0])
+    expect(switches(s)[0].getAttribute('aria-checked')).toBe('true')
+    const b = box(s, 0)
+    // It starts from the item's own values.
+    expect([field(b, 'Saved food name').value, field(b, 'Saved serving').value, field(b, 'Calories').value]).toEqual(['Fried egg', '2 large', '180'])
+    await setValue(field(b, 'Saved food name'), 'Pliny the Elder, 12 oz can')
+    await setValue(field(b, 'Saved food brand'), 'Russian River')
+    await setValue(field(b, 'Saved serving'), '1 can (12 oz)')
+    await setValue(field(b, 'Saved serving weight'), '355')
+    await setValue(field(b, 'Calories'), '210')
+    expect(s.el.querySelectorAll('.nut-item')[0].querySelector('input[aria-label="Food name"]').value).toBe('Fried egg')   // the logged row did not change
+    await click(byText('button', 'Save to diary'))
+    expect(m.api.addEntries.mock.calls[0][0].entries.map(e => [e.name, e.serving, e.calories])).toEqual([['Fried egg', '2 large', 180], ['Toast', '1 slice', 80]])
+    expect(m.api.createFood).toHaveBeenCalledTimes(1)
+    expect(m.api.createFood.mock.calls[0][0]).toEqual({ name: 'Pliny the Elder, 12 oz can', brand: 'Russian River', serving: '1 can (12 oz)', grams: 355, per: { calories: 210, protein_g: 12.5, carbs_g: 1, fat_g: 14 }, origin: 'ai', checkDuplicate: true })
+    expect(JSON.stringify(m.api.createFood.mock.calls[0][0])).not.toMatch(/image|photo|base64|note/i)
+    // The entry that was saved as a food is not offered again; the other one is.
+    expect(onSaved).toHaveBeenCalledWith([SAVED_ENTRIES.entries[1]])
+    expect(s.close).toHaveBeenCalled()
+  })
+
+  it('review: until the saved copy is edited it follows the row (the row is still editable); after, it does not', async () => {
+    const { s } = await review()
+    await click(switches(s)[1])
+    const b = box(s, 1)
+    const row = s.el.querySelectorAll('.nut-item')[1]
+    await setValue(row.querySelector('input[aria-label="Food name"]'), 'Sourdough toast')
+    expect(field(b, 'Saved food name').value).toBe('Sourdough toast')
+    await setValue(field(b, 'Saved food name'), 'My toast')
+    await setValue(row.querySelector('input[aria-label="Food name"]'), 'Rye toast')
+    expect(field(b, 'Saved food name').value).toBe('My toast')
+  })
+
+  it('review: an already-saved name and brand (any case) is asked about inline, before anything is written; both answers work', async () => {
+    const { s } = await review()
+    m.api.listFoods.mockResolvedValue({ foods: [{ id: 'old', source: 'custom', name: 'FRIED  egg', brand: '', serving: { label: '1 egg', grams: 50 }, per: { calories: 70 } }] })
+    await click(switches(s)[0])
+    await click(byText('button', 'Save to diary'))
+    expect(m.api.addEntries).not.toHaveBeenCalled()
+    expect(m.api.createFood).not.toHaveBeenCalled()
+    expect(s.el.textContent).toContain('You already have “FRIED  egg” saved (1 egg, 70 kcal).')
+    expect(byText('button', 'Update the saved food')).toBeTruthy(); expect(byText('button', 'Save as a new one')).toBeTruthy()
+    await click(byText('button', 'Update the saved food'))
+    expect(s.el.textContent).toContain('The saved food will be updated.')
+    await click(byText('button', 'Save to diary'))
+    expect(m.api.addEntries).toHaveBeenCalledTimes(1)
+    expect(m.api.createFood.mock.calls[0][0]).toMatchObject({ name: 'Fried egg', onDuplicate: 'update', checkDuplicate: true })
+  })
+
+  it('review: "Save as a new one" is sent as such; a different brand is not a duplicate', async () => {
+    const { s } = await review()
+    m.api.listFoods.mockResolvedValue({ foods: [{ id: 'old', source: 'custom', name: 'Fried egg', brand: 'Other', serving: { label: '1 egg' }, per: { calories: 70 } }] })
+    await click(switches(s)[0])
+    await click(byText('button', 'Save to diary'))
+    expect(m.api.addEntries).toHaveBeenCalledTimes(1)                                 // another brand: no question
+    expect(m.api.createFood.mock.calls[0][0].onDuplicate).toBeUndefined()
+  })
+
+  it('review: a bad saved value is refused in words before anything is written', async () => {
+    const { s } = await review()
+    await click(switches(s)[0])
+    await setValue(field(box(s, 0), 'Saved food name'), '   ')
+    await click(byText('button', 'Save to diary'))
+    expect(m.toast).toHaveBeenCalledWith(expect.stringContaining('A food needs a name'))
+    expect(m.api.addEntries).not.toHaveBeenCalled()
+  })
+
+  it('review: if the food cannot be saved after the diary was, the entry is kept and offered again, with the reason', async () => {
+    const { s, onSaved } = await review()
+    m.api.createFood.mockRejectedValue(new Error('you can keep at most 2000 foods'))
+    await click(switches(s)[0])
+    await click(byText('button', 'Save to diary'))
+    expect(m.api.addEntries).toHaveBeenCalledTimes(1)
+    expect(onSaved).toHaveBeenCalledWith(SAVED_ENTRIES.entries)
+    expect(m.toast).toHaveBeenCalledWith(expect.stringContaining('could not be saved as a food: you can keep at most 2000 foods'))
+  })
+
+  it('the diary offers "Save this as a food for next time?" on a new AI entry: dismissible (X), never on its own for other entries, and it saves', async () => {
+    m.api.analyze.mockResolvedValue({ draft: DRAFT, ai: AI })
+    m.api.addEntries.mockResolvedValue(SAVED_ENTRIES)
+    m.api.createFood.mockResolvedValue({ food: { id: 'f1' } })
+    m.api.getDay.mockResolvedValue(dayOf({ entries: SAVED_ENTRIES.entries }))
+    await mount(<Diary />)
+    expect(text()).not.toContain('for next time?')                                    // never unprompted
+    await click(host.querySelector('[aria-label="Add to lunch"]'))
+    const s = await showSheet()
+    await click(byText('button', 'Describe'))
+    await setValue(s.el.querySelector('textarea'), 'two eggs and toast')
+    await click(byText('button', 'Estimate calories & macros'))
+    await click(byText('button', 'Save to diary'))
+    await flush()
+    const prompts = () => [...host.querySelectorAll('.nut-saveprompt')]
+    expect(prompts()).toHaveLength(2)
+    expect(prompts()[0].textContent).toContain('Save “Fried egg” as a food for next time?')
+    const x = prompts()[1].querySelector('button[aria-label="Dismiss"]')
+    expect(x).toBeTruthy()
+    await click(x)
+    expect(prompts()).toHaveLength(1)
+    await click(prompts()[0].querySelector('.linkbtn'))
+    const sheet = await showSheet()
+    expect(sheet.el.textContent).toContain('Save as a food')
+    expect(field(sheet.el, 'Saved food name').value).toBe('Fried egg')
+    await click(byText('button', 'Save to My foods'))
+    expect(m.api.createFood).toHaveBeenCalledWith(expect.objectContaining({ name: 'Fried egg', serving: '2 large', origin: 'ai', checkDuplicate: true }))
+    expect(prompts()).toHaveLength(0)                                                  // saved: the prompt is gone
+  })
+
+  it('an entry that was not from the AI gets no prompt', async () => {
+    m.api.getDay.mockResolvedValue(dayOf())
+    m.api.addEntries.mockResolvedValue({ entries: [{ id: 'q1', name: 'Quick add', source: 'quick', calories: 200 }] })
+    await mount(<Diary />)
+    await click(host.querySelector('[aria-label="Add to lunch"]'))
+    const s = await showSheet()
+    await click(byText('button', 'Quick add'))
+    await setValue(s.el.querySelector('input[aria-label="Calories"]'), '200')
+    await click([...s.el.querySelectorAll('button')].find(b => b.textContent.startsWith('Add to')))
+    expect(host.querySelector('.nut-saveprompt')).toBeNull()
+  })
+
+  it('Edit entry: "Save as food" from an AI entry logged as 1.5 × a can saves ONE can, from the entry’s base, marked as an AI estimate', async () => {
+    const entry = { id: 'e9', meal: 'snack', name: 'Pliny the Elder', brand: '', source: 'ai', serving: '1 can (12 oz)', qty: 1.5, grams: 532.5, calories: 315, protein_g: 3, carbs_g: 19.5, fat_g: 0, base: { calories: 210, protein_g: 2, carbs_g: 13, fat_g: 0, grams: 355 } }
+    openEditEntry({ entry, date: '2026-10-12', onSaved: vi.fn() })
+    const s = await showSheet()
+    m.api.createFood.mockResolvedValue({ food: { id: 'f1' } })
+    await click(byText('button', 'Save as food'))
+    const sheet = await showSheet()
+    expect(sheet.el.textContent).toContain('never the photo')
+    const f = n => field(sheet.el, n).value
+    expect([f('Saved food name'), f('Saved serving'), f('Saved serving weight'), f('Calories'), f('Protein'), f('Carbs'), f('Fat')]).toEqual(['Pliny the Elder', '1 can (12 oz)', '355', '210', '2', '13', '0'])
+    await click(byText('button', 'Save to My foods'))
+    expect(m.api.createFood.mock.calls[0][0]).toEqual({ name: 'Pliny the Elder', brand: '', serving: '1 can (12 oz)', grams: 355, per: { calories: 210, protein_g: 2, carbs_g: 13, fat_g: 0 }, origin: 'ai', checkDuplicate: true })
+    expect(s).toBeTruthy()
+  })
+
+  it('Edit entry: an older Quick add entry (no base, qty 2) saves per unit, not as the total; no AI badge', async () => {
+    openEditEntry({ entry: { id: 'q', meal: 'snack', name: 'IPA', source: 'quick', calories: 400, protein_g: 4, carbs_g: 30, fat_g: 0, qty: 2 }, date: '2026-10-12', onSaved: vi.fn() })
+    await showSheet()
+    m.api.createFood.mockResolvedValue({ food: { id: 'f1' } })
+    await click(byText('button', 'Save as food'))
+    const sheet = await showSheet()
+    expect(sheet.el.textContent).not.toContain('never the photo')
+    await click(byText('button', 'Save to My foods'))
+    expect(m.api.createFood.mock.calls[0][0]).toEqual({ name: 'IPA', brand: '', serving: '1 serving', grams: null, per: { calories: 200, protein_g: 2, carbs_g: 15, fat_g: 0 }, checkDuplicate: true })
+  })
+
+  it('the save sheet: a duplicate is answered inline (update or new); the sheet always has Cancel', async () => {
+    openEditEntry({ entry: { id: 'q', meal: 'snack', name: 'IPA', source: 'quick', calories: 200, protein_g: 2, carbs_g: 15, fat_g: 0, qty: 1 }, date: '2026-10-12', onSaved: vi.fn() })
+    await showSheet()
+    m.api.createFood.mockRejectedValueOnce(apiError('You already have a saved food with that name and brand.', 409, { code: 'duplicate', existing: { id: 'old', name: 'IPA', serving: { label: '1 pint' }, per: { calories: 180 } } }))
+    await click(byText('button', 'Save as food'))
+    const sheet = await showSheet()
+    expect(byText('button', 'Cancel')).toBeTruthy()
+    await click(byText('button', 'Save to My foods'))
+    expect(sheet.el.textContent).toContain('You already have “IPA” saved (1 pint, 180 kcal).')
+    expect(byText('button', 'Save to My foods')).toBeUndefined()                      // the question replaces the button; nothing is saved twice
+    m.api.createFood.mockResolvedValue({ food: { id: 'old' }, updated: true })
+    await click(byText('button', 'Update the saved food'))
+    expect(m.api.createFood.mock.calls.at(-1)[0]).toMatchObject({ name: 'IPA', onDuplicate: 'update' })
+    expect(m.toast).toHaveBeenCalledWith('Saved food updated')
+  })
+})
+
+describe('Saved foods in search, My foods and the lists', () => {
+  const MINE = { source: 'mine', kind: 'ai', origin: 'ai', rank: 5120, ext: 'f1', name: 'Pliny the Elder, 12 oz can', brand: 'Russian River', bases: [{ label: '1 can (12 oz)', grams: 355, per: { calories: 210, protein_g: 2, carbs_g: 13, fat_g: 0 } }] }
+  async function openSearch() { openAddSheet({ date: '2026-10-12', meal: 'snack', onSaved: vi.fn() }); return showSheet() }
+  const typeSearch = async (s, v) => { await setValue(s.el.querySelector('input[placeholder="Search foods"]'), v); await wait(520) }
+
+  it('a saved food is at the TOP of Add → Search, labelled "My food" (and "AI estimate"), above the outside sources', async () => {
+    mockSearch({ mine: [MINE], off: [{ ...NUTELLA, name: 'Pliny stout', rank: 1180 }], usda: [{ ...NUTELLA, source: 'usda', kind: 'foundation', ext: '9', name: 'Pliny beer', rank: 2100 }] })
+    const s = await openSearch()
+    await typeSearch(s, 'pliny')
+    expect(m.api.searchFoods.mock.calls.map(c => c[1]).sort()).toEqual(['fatsecret', 'mine', 'off', 'usda'])
+    const rows = [...s.el.querySelectorAll('.nut-pick')]
+    expect(rows[0].textContent).toContain('Pliny the Elder, 12 oz can')
+    expect([...rows[0].querySelectorAll('.nut-src')].map(e => e.textContent)).toEqual(['My food', 'AI estimate'])
+    expect(rows.slice(1).every(r => !r.textContent.includes('My food'))).toBe(true)
+    expect(s.el.querySelector('[role="status"]')).toBeNull()                             // own foods never show a spinner of their own
+  })
+
+  it('tapping it logs it by its id with the servings stepper: no snapshot, no AI call', async () => {
+    mockSearch({ mine: [MINE] })
+    m.api.addEntries.mockResolvedValue({})
+    const s = await openSearch()
+    await typeSearch(s, 'pliny')
+    await click(s.el.querySelector('.nut-pick'))
+    expect(s.el.textContent).toContain('1 can (12 oz)')
+    expect(s.el.querySelector('input[aria-label="Weight in grams"]').value).toBe('355')
+    await click(s.el.querySelector('[aria-label="Increase Servings"]'))               // 1 → 1.5
+    await click(byText('button', 'Add to snacks'))
+    expect(m.api.addEntries).toHaveBeenCalledWith({ date: '2026-10-12', meal: 'snack', source: 'food', foodId: 'f1', qty: 1.5 })
+    expect(m.api.analyze).not.toHaveBeenCalled()
+  })
+
+  it('with nothing saved that matches, nothing changes: the outside results and the usual messages', async () => {
+    mockSearch({ off: [NUTELLA] })
+    const s = await openSearch()
+    await typeSearch(s, 'nutella')
+    expect([...s.el.querySelectorAll('.nut-src')].map(e => e.textContent)).toEqual(['OFF'])
+    expect(s.el.textContent).not.toContain('Nothing found')
+  })
+
+  it('Favorites, Recent and All (My foods list in the Add sheet) show the AI-estimate badge; the portion screen too', async () => {
+    const food = { id: 'f1', source: 'custom', origin: 'ai', name: 'Pliny the Elder', brand: '', favorite: true, serving: { label: '1 can', grams: 355 }, per: { calories: 210, protein_g: 2, carbs_g: 13, fat_g: 0 } }
+    m.api.listFoods.mockResolvedValue({ foods: [food, { ...food, id: 'f2', origin: undefined, name: 'Plain' }] })
+    mockSearch({})
+    const s = await openSearch()
+    await click(byText('button', 'My foods'))
+    await flush()
+    const rows = [...s.el.querySelectorAll('.nut-pick')]
+    expect(rows[0].textContent).toContain('AI estimate'); expect(rows[1].textContent).not.toContain('AI estimate')
+    for (const scope of ['Favourites', 'All']) { await click(byText('button', scope)); expect(m.api.listFoods.mock.calls.at(-1)[0]).toBe(scope === 'All' ? 'all' : 'favorite') }
+    await click(s.el.querySelector('.nut-pick'))
+    expect(s.el.querySelector('.nut-picked .nut-src').textContent).toBe('AI estimate')
+  })
+
+  it('My foods page: the badge, and the food opens in the usual editable sheet (not read-only)', async () => {
+    m.api.listFoods.mockResolvedValue({ foods: [{ id: 'f1', source: 'custom', origin: 'ai', name: 'Pliny the Elder', brand: '', favorite: false, serving: { label: '1 can', grams: 355 }, per: { calories: 210, protein_g: 2, carbs_g: 13, fat_g: 0 } }] })
+    await mount(<Foods />)
+    expect(host.querySelector('.nut-food .nut-ai-badge').textContent).toBe('AI estimate')
+    await click(host.querySelector('.nut-food-m'))
+    const s = await showSheet()
+    expect(s.el.textContent).not.toContain('cannot be edited')
+    expect(s.el.querySelector('.nut-ai-badge').textContent).toBe('AI estimate')
+    expect(s.el.querySelector('input[aria-label="Name"]').disabled).toBe(false)
+    m.api.updateFood.mockResolvedValue({})
+    await setValue(s.el.querySelector('input[aria-label="Name"]'), 'Pliny (can)')
+    await click(byText('button', 'Save'))
+    expect(m.api.updateFood.mock.calls[0][1]).toMatchObject({ name: 'Pliny (can)', serving: '1 can' })
+    expect(m.api.updateFood.mock.calls[0][1].origin).toBeUndefined()                  // the mark is not touched by an edit
+  })
+
+  it('old saved foods (no origin) look and work as before', async () => {
+    m.api.listFoods.mockResolvedValue({ foods: [{ id: 'o', source: 'custom', name: 'Granola bar', brand: '', favorite: false, serving: { label: '1 bar', grams: null }, per: { calories: 190, protein_g: 4, carbs_g: 29, fat_g: 7 } }] })
+    await mount(<Foods />)
+    expect(host.querySelector('.nut-ai-badge')).toBeNull()
+    expect(text()).toContain('Granola bar')
   })
 })

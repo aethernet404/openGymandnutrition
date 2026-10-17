@@ -230,3 +230,56 @@ export function amountPatch(base, qty) {
   const g = gramsForQty(base, qty)
   return { qty, ...(g != null ? { grams: g } : {}), base: { ...base.per, grams: base.gramsPer } }
 }
+
+/* ---------- saving an estimate or an entry as a reusable food ---------- */
+
+const normName = s => String(s || '').toLowerCase().replace(/\s+/g, ' ').trim()
+
+/** Is there already a saved food with this name and brand (ignoring case and extra spaces)? Returns it or null. */
+export const findDuplicate = (foods, name, brand = '') => (foods || []).find(f => (f.source ?? 'custom') === 'custom' && normName(f.name) === normName(name) && normName(f.brand) === normName(brand)) || null
+
+/**
+ * The saved food an existing entry stands for, per ONE serving: the entry's stored base (or totals ÷ amount for an
+ * older entry or one from AI / Quick add), never its totals — an entry logged as 2 × a can is a can's numbers, not
+ * two cans'. The serving label and weight are the entry's own; origin is 'ai' for an AI estimate.
+ */
+export function foodFromEntry(entry) {
+  const base = entryBase(entry)
+  const r1 = n => Math.round(n * 10) / 10
+  return {
+    name: String(entry.name || '').trim(), brand: String(entry.brand || '').trim(),
+    serving: String(entry.serving || '').trim(), grams: base.gramsPer != null ? r1(base.gramsPer) : null,
+    calories: Math.round(base.per.calories), protein_g: r1(base.per.protein_g), carbs_g: r1(base.per.carbs_g), fat_g: r1(base.per.fat_g),
+    origin: entry.source === 'ai' ? 'ai' : null
+  }
+}
+
+/**
+ * The form of a food to save → the POST /foods body, or the first problem in words. Only the name and numbers the
+ * person confirmed go anywhere: no photo, no note, no model text.
+ */
+export function savedFoodBody(f, { origin = f.origin, choice = null } = {}) {
+  const r = foodBody(f)
+  if (!r.ok) return r
+  const { ext: _e, ...body } = r.body
+  return { ok: true, body: { ...body, ...(origin ? { origin } : {}), checkDuplicate: true, ...(choice ? { onDuplicate: choice } : {}) } }
+}
+
+/**
+ * What an AI review row would be saved as: the row's own values until the person edits the saved copy, so the saved
+ * name, serving and numbers can differ from what is logged without ever changing what is logged.
+ */
+export function savedFields(row, over = {}) {
+  const pick = (k, fallback) => (over[k] !== undefined ? over[k] : fallback)
+  return {
+    name: pick('name', row.name || ''), brand: pick('brand', ''), serving: pick('serving', row.portion || ''), grams: pick('grams', row.grams ?? null),
+    calories: pick('calories', row.calories), protein_g: pick('protein_g', row.protein_g), carbs_g: pick('carbs_g', row.carbs_g), fat_g: pick('fat_g', row.fat_g),
+    origin: 'ai'
+  }
+}
+/** The overrides after the form changed from `eff` to `next`: only what actually differs from the row. */
+export function savedOverrides(over, eff, next) {
+  const out = { ...over }
+  for (const k of ['name', 'brand', 'serving', 'grams', 'calories', 'protein_g', 'carbs_g', 'fat_g']) if (next[k] !== eff[k]) out[k] = next[k]
+  return out
+}
