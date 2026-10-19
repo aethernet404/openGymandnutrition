@@ -6,6 +6,8 @@
  * into the file.
  */
 
+import { microsOf, hasMicros } from './micros.js';
+
 export const MEALS = ['breakfast', 'lunch', 'dinner', 'snack'];
 export const SOURCES = ['manual', 'quick', 'food', 'ai'];
 export const FOOD_SOURCES = ['custom', 'off', 'usda', 'fatsecret', 'ai'];
@@ -109,6 +111,12 @@ export function food(body, { partial = false } = {}) {
     if (!FOOD_SOURCES.includes(body.source)) return bad(`source must be one of ${FOOD_SOURCES.join(', ')}`);
     out.source = body.source;
   }
+  // Micronutrients of one serving: only the known ones; empty = none known (stored as no key at all, never as zeros).
+  if (body.micros !== undefined) {
+    const m = microsOf(body.micros);
+    if (!m.ok) return m;
+    out.micros = hasMicros(m.value) ? m.value : null;
+  }
   if (body.origin !== undefined) {
     if (body.origin !== null && !FOOD_ORIGINS.includes(body.origin)) return bad(`origin must be one of ${FOOD_ORIGINS.join(', ')}`);
     out.origin = body.origin;
@@ -178,8 +186,19 @@ export function entry(body, { partial = false, foodGiven = false } = {}) {
       const g = num(body.base.grams ?? null, 'base grams', LIMITS.grams, { nullable: true });
       if (!g.ok) return g;
       b.grams = g.value == null || g.value === 0 ? null : round(g.value, 2);
+      if (body.base.micros !== undefined) {
+        const m = microsOf(body.base.micros);
+        if (!m.ok) return m;
+        if (hasMicros(m.value)) b.micros = m.value;
+      }
       out.base = b;
     }
+  }
+  // What this entry supplied, scaled by what was eaten, copied at log time so past days do not move if a database changes.
+  if (body.micros !== undefined) {
+    const m = microsOf(body.micros);
+    if (!m.ok) return m;
+    out.micros = hasMicros(m.value) ? m.value : null;
   }
   if (body.foodId !== undefined) out.foodId = body.foodId == null ? null : clean(body.foodId, 40) || null;
   if (body.note !== undefined) out.note = clean(body.note, 200);

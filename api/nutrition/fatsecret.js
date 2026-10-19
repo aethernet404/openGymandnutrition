@@ -35,6 +35,8 @@ import { atomicWrite } from '../durable.js';
 import { clean, round } from './validate.js';
 import { chooseServingGrams, sensibleGrams } from './rank.js';
 import { LookupError } from './lookup.js';
+import { hasMicros } from './micros.js';
+import { microsFromFatSecret } from './micros-sources.js';
 
 const TOKEN_URL = () => process.env.NUTRITION_FATSECRET_TOKEN_URL || 'https://oauth.fatsecret.com/connect/token';
 const API_BASE = () => (process.env.NUTRITION_FATSECRET_BASE || 'https://platform.fatsecret.com/rest').replace(/\/$/, '');
@@ -134,15 +136,16 @@ export function normaliseFood(f) {
     const grams = servingWeight(s);
     const desc = clean(s.serving_description || s.measurement_description, 60);
     const is100 = grams === 100 && (String(s.serving_id) === '0' || /^100\s?(g|ml)\b/i.test(desc) || !desc);
-    if (is100) { standard.push({ label: '100 g', grams: 100, per }); continue; }
+    const micros = microsFromFatSecret(s);
+    if (is100) { standard.push({ label: '100 g', grams: 100, per, ...(hasMicros(micros) ? { micros } : {}) }); continue; }
     let label = desc || (grams ? `${grams} g` : '1 serving');
     if (grams && !/\d\s?(g|ml)\b/i.test(label) && !/\(.*\)/.test(label)) label = `${label} (${grams} g)`.slice(0, 60);
-    real.push({ label, grams, per, isDefault: String(s.is_default) === '1' });
+    real.push({ label, grams, per, ...(hasMicros(micros) ? { micros } : {}), isDefault: String(s.is_default) === '1' });
   }
   real.sort((a, b) => (b.isDefault ? 1 : 0) - (a.isDefault ? 1 : 0));
   const seen = new Set();
   const bases = [...real, ...standard].filter(b => { const k = b.label + '|' + b.per.calories; if (seen.has(k)) return false; seen.add(k); return true; })
-    .slice(0, 5).map(({ label, grams, per }) => ({ label, grams, per }));
+    .slice(0, 5).map(({ label, grams, per, micros }) => ({ label, grams, per, ...(micros ? { micros } : {}) }));
   if (!bases.length) return null;
   const brand = clean(f.brand_name, 60);
   return { source: 'fatsecret', kind: String(f.food_type || '').toLowerCase() === 'brand' || brand ? 'brand' : 'generic', ext: String(f.food_id), name, brand, bases };

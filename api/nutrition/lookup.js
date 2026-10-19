@@ -25,6 +25,8 @@
  */
 import { clean, round } from './validate.js';
 import { rankHits, dupKey, chooseServingGrams, servingLabel } from './rank.js';
+import { hasMicros, scaleMicros } from './micros.js';
+import { microsFromOff, microsFromUsda } from './micros-sources.js';
 
 const OFF_BASE = () => (process.env.NUTRITION_OFF_BASE || 'https://world.openfoodfacts.org').replace(/\/$/, '');
 const USDA_BASE = () => (process.env.NUTRITION_USDA_BASE || 'https://api.nal.usda.gov/fdc/v1').replace(/\/$/, '');
@@ -104,8 +106,11 @@ function offBases(p) {
     perServing = scalePer(per100, grams / 100);
     if (declared && per100.calories > 0 && Math.abs(declared.calories - perServing.calories) <= Math.max(15, 0.25 * perServing.calories)) perServing = declared;
   } else if (declared && !per100) perServing = declared;
-  if (perServing && (grams || !per100)) bases.push({ label: servingLabel(p.serving_size, grams), grams: grams ?? null, per: perServing });
-  if (per100) bases.push({ label: '100 g', grams: 100, per: per100 });
+  // Micronutrients: per 100 g as Open Food Facts gives them, scaled to the serving the same way as the macros. Absent = unknown.
+  const m100 = microsFromOff(n);
+  const withMicros = (b, m) => (hasMicros(m) ? { ...b, micros: m } : b);
+  if (perServing && (grams || !per100)) bases.push(withMicros({ label: servingLabel(p.serving_size, grams), grams: grams ?? null, per: perServing }, grams ? scaleMicros(m100, grams / 100) : undefined));
+  if (per100) bases.push(withMicros({ label: '100 g', grams: 100, per: per100 }, m100));
   return bases;
 }
 
@@ -150,15 +155,17 @@ export function normaliseUsda(f) {
   const name = titleCase(clean(f.description, 120));
   if (!name) return null;
   const bases = [];
+  const m100 = microsFromUsda(list);
+  const withMicros = (b, m) => (hasMicros(m) ? { ...b, micros: m } : b);
   // Branded foods list their label serving; the reference datasets are per 100 g only.
   const unit = String(f.servingSizeUnit || '').toLowerCase();
   const size = num(f.servingSize);
   const grams = ['g', 'grm', 'ml', 'mlt'].includes(unit) ? chooseServingGrams(size, '') : null;
   if (grams) {
     const household = clean(f.householdServingFullText, 40);
-    bases.push({ label: household ? `${household} (${round(grams, 1)} g)` : `${round(grams, 1)} g`, grams: round(grams, 1), per: scalePer(per100, grams / 100) });
+    bases.push(withMicros({ label: household ? `${household} (${round(grams, 1)} g)` : `${round(grams, 1)} g`, grams: round(grams, 1), per: scalePer(per100, grams / 100) }, scaleMicros(m100, grams / 100)));
   }
-  bases.push({ label: '100 g', grams: 100, per: per100 });
+  bases.push(withMicros({ label: '100 g', grams: 100, per: per100 }, m100));
   const kind = USDA_KIND[String(f.dataType || '').toLowerCase()] || 'other';
   return { source: 'usda', kind, ext: String(f.fdcId), name, brand: titleCase(clean(f.brandName || f.brandOwner, 60)), bases };
 }

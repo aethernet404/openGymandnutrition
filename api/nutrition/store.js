@@ -23,6 +23,7 @@ import { atomicWrite } from '../durable.js';
 import { dataDir } from './config.js';
 import { MACROS, LIMITS, round } from './validate.js';
 import { relevance } from './rank.js';
+import { sumMicros } from './micros.js';
 
 export class NutritionDataError extends Error {}
 export class NutritionLimitError extends Error {}
@@ -154,11 +155,20 @@ export function healthHistory(d, to, days = 30, maxWorkouts = 30) {
   return { from: out[0].date, to, days: out, workouts, weight, updatedAt, hasData: stamps.length > 0, token: !!h.token };
 }
 
+/**
+ * The day's micronutrients, in two buckets so the app can show food alone or food plus supplements. Each is
+ * { totals, withData, entries }: the known amounts added up (a nutrient nobody knows is absent, not 0), how many entries
+ * had any micronutrient data, and how many entries there were. Entries with no data stay visible in `entries`.
+ */
+export function microsSummary(entries) {
+  return { food: sumMicros(entries.filter(e => e.meal !== 'supplements')), supplements: sumMicros(entries.filter(e => e.meal === 'supplements')) };
+}
+
 export function dayView(d, date) {
   const entries = d.days[date]?.entries || [];
   const byMeal = {};
   for (const m of ['breakfast', 'lunch', 'dinner', 'snack']) byMeal[m] = totalsOf(entries.filter(e => e.meal === m));
-  return { date, entries, totals: totalsOf(entries), byMeal, goals: d.goals, health: healthDay(d, date), activity: activityDay(d, date), eatBack: eatBackOf(d) };
+  return { date, entries, totals: totalsOf(entries), byMeal, goals: d.goals, health: healthDay(d, date), activity: activityDay(d, date), eatBack: eatBackOf(d), micros: microsSummary(entries) };
 }
 
 /** Days with at least one entry in [from, to], oldest first. */
@@ -191,6 +201,7 @@ export function addFood(d, input) {
   if (Object.keys(d.foods).length >= LIMITS.foods) throw new NutritionLimitError(`you can keep at most ${LIMITS.foods} foods`);
   const now = Date.now();
   const f = { id: newId(), source: 'custom', ext: null, favorite: false, useCount: 0, lastUsed: null, createdAt: now, ...input };
+  if (f.micros == null) delete f.micros;
   d.foods[f.id] = f;
   return f;
 }
@@ -209,6 +220,7 @@ export function noteRecent(d, input) {
   const now = Date.now();
   if (existing) { existing.useCount = (existing.useCount || 0) + 1; existing.lastUsed = now; return existing; }
   const f = { id: newId(), favorite: false, useCount: 1, lastUsed: now, createdAt: now, ...candidate };
+  if (f.micros == null) delete f.micros;
   d.foods[f.id] = f;
   pruneRecents(d);
   return f;
@@ -248,6 +260,7 @@ export function updateEntry(d, date, id, patch, newDate) {
   const next = { ...hit.entry, ...patch, updated: Date.now() };
   if (next.confidence === null) delete next.confidence;
   if (next.base == null) delete next.base;
+  if (next.micros == null) delete next.micros;
   if (newDate && newDate !== date) {
     const target = (d.days[newDate] ||= { entries: [] });
     if (target.entries.length >= LIMITS.entriesPerDay) throw new NutritionLimitError(`a day can hold at most ${LIMITS.entriesPerDay} entries`);
@@ -306,7 +319,7 @@ export function searchSaved(d, q, limit = 10) {
     if (!r.full) continue;
     out.push({
       source: 'mine', kind: f.origin === 'ai' ? 'ai' : 'mine', origin: f.origin || null, ext: f.id, name: f.name, brand: f.brand || '',
-      bases: [{ label: f.serving?.label || '1 serving', grams: f.serving?.grams ?? null, per: f.per }],
+      bases: [{ label: f.serving?.label || '1 serving', grams: f.serving?.grams ?? null, per: f.per, ...(f.micros ? { micros: f.micros } : {}) }],
       rank: 5000 + r.score + (f.favorite ? 20 : 0) + Math.min(10, f.useCount || 0)
     });
   }

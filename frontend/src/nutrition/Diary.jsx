@@ -8,6 +8,7 @@ import { dateLocale } from '../lib/i18n.js'
 import { nt } from './i18n.js'
 import * as nutri from './api.js'
 import { openAddSheet, openEditEntry, openSaveFood } from './sheets.jsx'
+import MicrosCard from './MicrosCard.jsx'
 import { useStore } from '../store/useStore.js'
 import { EMPTY_TOTALS, MACRO_KEYS, foodFromEntry, MACRO_LABEL, MEALS, MEAL_LABEL, burnedOf, fraction, goalWithEatBack, macroLine, mealForHour, netOf, relativeDay, remaining, shiftISO, signed, sparkPath, trim, updatedText, validISO, weightText, weightTrend, workoutLine } from './diary.js'
 import './nutrition.css'
@@ -185,6 +186,7 @@ export default function Diary() {
 
     {day && status !== 'off' && <>
       <Summary totals={day.totals || EMPTY_TOTALS} goals={day.goals} health={day.health} eatBack={day.eatBack} onGoals={() => nav('/nutrition/goals')} onHealth={() => nav('/nutrition/health')} />
+      <MicrosCard micros={day.micros} />
       <ActivityCard activity={day.activity} unit={unit} />
       <WeightCard weight={weight} unit={unit} onSetup={() => nav('/nutrition/health')} />
       {status === 'error' && <div className="small" style={{ color: 'var(--red)', margin: '0 4px 10px' }}>{nt('Could not refresh: {0}', state.error)} <button className="linkbtn" onClick={load}>{nt('Try again')}</button></div>}

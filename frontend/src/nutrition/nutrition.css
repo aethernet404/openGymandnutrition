@@ -194,3 +194,26 @@
 .nut-saveprompt{flex-wrap:wrap;align-items:center;margin:0 0 10px}
 .nut-saveprompt>span{flex:1 1 180px;min-width:0;overflow-wrap:anywhere}
 .nut-ai-badge{margin-inline-start:8px;vertical-align:middle}
+
+/* More nutrients (collapsed form section) and the Micronutrients card */
+.nut-more{margin-top:12px;min-width:0}
+.nut-more-h{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;padding:10px 12px;border-radius:10px;background:var(--surface-2);color:var(--label);font-size:15px;text-align:start}
+.nut-more-b{margin-top:8px;min-width:0}
+.nut-more-note{margin:0 2px 4px;overflow-wrap:anywhere}
+
+.nut-micros{margin-bottom:12px;min-width:0}
+.nut-micros-h{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;color:var(--label);font-size:17px;text-align:start;padding:0}
+.nut-micros-h>span{min-width:0;overflow-wrap:anywhere}
+.nut-micros-b{margin-top:12px;min-width:0}
+.nut-cov{margin:10px 2px 4px;overflow-wrap:anywhere}
+.nut-mgroup{min-width:0}
+.nut-mrow{padding:6px 0;min-width:0}
+.nut-mrow-t{gap:10px;align-items:baseline;flex-wrap:wrap;font-size:15px}
+.nut-mrow-t>span{min-width:0;overflow-wrap:anywhere}
+.nut-mbar{height:6px;border-radius:99px;background:var(--surface-3);overflow:hidden;margin-top:5px}
+.nut-mbar>i{display:block;height:100%;border-radius:99px;background:var(--green)}
+.nut-mbar.over>i{background:var(--orange)}
+.nut-munk{margin:2px 0 0;overflow-wrap:anywhere}
+.nut-mnote{margin:14px 2px 0;overflow-wrap:anywhere}
+.nut-ul-notes{list-style:none;margin:10px 0 0;padding:10px 12px;border-radius:10px;background:var(--surface-2);color:var(--label-2);font-size:13px;line-height:1.4;overflow-wrap:anywhere}
+.nut-ul-notes li+li{margin-top:6px}

@@ -2033,3 +2033,229 @@ describe('Saved foods in search, My foods and the lists', () => {
     expect(text()).toContain('Granola bar')
   })
 })
+
+/* ------------------------------ micronutrients ------------------------------ */
+
+describe('Micronutrients card', () => {
+  const MICROS = {
+    food: { totals: { calcium_mg: 650, iron_mg: 9, vit_d_mcg: 0, fiber_g: 14, sugar_g: 30, sodium_mg: 1200 }, withData: 6, entries: 9 },
+    supplements: { totals: { vit_d_mcg: 25, iron_mg: 18, magnesium_mg: 400, zinc_mg: 50 }, withData: 2, entries: 2 }
+  }
+  const card = () => host.querySelector('.nut-micros')
+  const open = async () => click(card().querySelector('.nut-micros-h'))
+  beforeEach(() => { try { localStorage.clear() } catch {} })
+
+  it('is closed by default and tap reveals it; nothing is listed until then', async () => {
+    m.api.getDay.mockResolvedValue(dayOf({ micros: MICROS }))
+    await mount(<Diary />)
+    expect(card()).toBeTruthy()
+    expect(card().querySelector('.nut-micros-h').getAttribute('aria-expanded')).toBe('false')
+    expect(card().querySelector('.nut-micros-b')).toBeNull()
+    expect(card().textContent).toContain('8 of 11 entries')                  // a hint on the closed card
+    await open()
+    expect(card().querySelector('.nut-micros-h').getAttribute('aria-expanded')).toBe('true')
+    expect(card().querySelector('.nut-micros-b')).toBeTruthy()
+    await open()
+    expect(card().querySelector('.nut-micros-b')).toBeNull()
+  })
+
+  it('sits directly under the macro summary', async () => {
+    m.api.getDay.mockResolvedValue(dayOf({ micros: MICROS }))
+    await mount(<Diary />)
+    const summary = [...host.querySelectorAll('.card')].find(c => c.textContent.includes('Calories') && c.querySelector('.nut-macros'))
+    expect(summary.nextElementSibling).toBe(card())
+  })
+
+  it('amount and percent of the Daily Value, grouped Vitamins / Minerals / Other, with a bar; Food + supplements adds the supplement amounts', async () => {
+    m.api.getDay.mockResolvedValue(dayOf({ micros: MICROS }))
+    await mount(<Diary />)
+    await open()
+    const groups = [...card().querySelectorAll('.nut-mgroup')]
+    expect(groups.map(g => g.querySelector('.nut-section-t').textContent)).toEqual(['Vitamins', 'Minerals', 'Other'])
+    const t = card().textContent
+    expect(t).toMatch(/Vitamin D.*25 mcg · 125%/)          // 0 from food + 25 from supplements
+    expect(t).toMatch(/Iron.*27 mg · 150%/)                // 9 + 18
+    expect(t).toMatch(/Calcium.*650 mg · 50%/)
+    expect(t).toMatch(/Fiber.*14 g · 50%/)
+    expect(t).toMatch(/Sugars \(total\).*30 g/); expect(t).not.toMatch(/Sugars \(total\).*30 g · /)    // no Daily Value for total sugars: no percent, no bar
+    const bar = [...card().querySelectorAll('.nut-mrow')].find(r => r.textContent.includes('Iron')).querySelector('.nut-mbar')
+    expect(bar.getAttribute('aria-valuenow')).toBe('150'); expect(bar.className).toContain('over'); expect(bar.querySelector('i').style.width).toBe('100%')
+    expect([...card().querySelectorAll('.nut-mrow')].find(r => r.textContent.includes('Sugars')).querySelector('.nut-mbar')).toBeNull()
+  })
+
+  it('Food only leaves the supplements out, and the choice is remembered on this device', async () => {
+    m.api.getDay.mockResolvedValue(dayOf({ micros: MICROS }))
+    await mount(<Diary />)
+    await open()
+    await click(byText('button', 'Food only'))
+    const t = () => card().textContent
+    const rowsText = () => [...card().querySelectorAll('.nut-mrow')].map(r => r.textContent).join('|')
+    expect(t()).toMatch(/Iron.*9 mg · 50%/); expect(t()).toMatch(/Vitamin D.*0 mcg · 0%/); expect(rowsText()).not.toContain('Magnesium')
+    expect(t()).toContain('Based on 6 of 9 entries that have micronutrient data.')
+    await click(byText('button', 'Food + supplements'))
+    expect(t()).toMatch(/Iron.*27 mg/); expect(rowsText()).toContain('Magnesium')
+    expect(t()).toContain('Based on 8 of 11 entries that have micronutrient data.')
+    await click(byText('button', 'Food only'))
+    act(() => root.unmount()); root = createRoot(host)
+    await mount(<Diary />); await open()
+    expect(byText('button', 'Food only').className || '').toBeDefined()
+    expect([...card().querySelectorAll('.nut-mrow')].map(r => r.textContent).join('|')).not.toContain('Magnesium')      // remembered
+  })
+
+  it('partial coverage is stated; all-covered says so; none says why and never shows zeros', async () => {
+    m.api.getDay.mockResolvedValue(dayOf({ micros: { food: { totals: {}, withData: 0, entries: 4 }, supplements: { totals: {}, withData: 0, entries: 0 } } }))
+    await mount(<Diary />)
+    await open()
+    expect(card().querySelector('.nut-cov').textContent).toContain('None of the 4 entries have micronutrient data')
+    expect(card().querySelectorAll('.nut-mrow')).toHaveLength(0)
+    expect(card().textContent).not.toMatch(/\b0 (mg|mcg|g)\b/)
+    act(() => root.unmount()); root = createRoot(host)
+    m.api.getDay.mockResolvedValue(dayOf({ micros: { food: { totals: { iron_mg: 2 }, withData: 3, entries: 3 }, supplements: { totals: {}, withData: 0, entries: 0 } } }))
+    await mount(<Diary />); await open()
+    expect(card().querySelector('.nut-cov').textContent).toBe('Based on all 3 entries.')
+    act(() => root.unmount()); root = createRoot(host)
+    m.api.getDay.mockResolvedValue(dayOf({ micros: { food: { totals: {}, withData: 0, entries: 0 }, supplements: { totals: {}, withData: 0, entries: 0 } } }))
+    await mount(<Diary />); await open()
+    expect(card().querySelector('.nut-cov').textContent).toBe('Nothing logged for this day yet.')
+  })
+
+  it('what is unknown is listed as "No data", not drawn as zero', async () => {
+    m.api.getDay.mockResolvedValue(dayOf({ micros: { food: { totals: { iron_mg: 2 }, withData: 1, entries: 2 }, supplements: { totals: {}, withData: 0, entries: 0 } } }))
+    await mount(<Diary />); await open()
+    const minerals = [...card().querySelectorAll('.nut-mgroup')][1]
+    expect(minerals.textContent).toContain('Iron')
+    expect(minerals.querySelector('.nut-munk').textContent).toMatch(/^No data: .*Calcium/)
+    expect(minerals.querySelector('.nut-munk').textContent).not.toContain('Iron')
+  })
+
+  it('says in one line that percent of the Daily Value is a general reference, not personal need or medical advice', async () => {
+    m.api.getDay.mockResolvedValue(dayOf({ micros: MICROS }))
+    await mount(<Diary />); await open()
+    expect(card().querySelector('.nut-mnote').textContent).toBe('Percent of the FDA Daily Value for adults is a general reference printed on food labels, not your personal need and not medical advice.')
+  })
+
+  it('a neutral note appears (even with the card closed, and whichever mode) when intake is above the usual adult upper limit', async () => {
+    m.api.getDay.mockResolvedValue(dayOf({ micros: MICROS }))
+    await mount(<Diary />)
+    const notes = () => [...card().querySelectorAll('.nut-ul-notes li')].map(li => li.textContent)
+    expect(card().querySelector('.nut-micros-b')).toBeNull()
+    expect(notes().some(n => /Zinc: 50 mg today is above the usual upper limit for adults \(40 mg\)\. Worth checking with a doctor or pharmacist\./.test(n))).toBe(true)
+    expect(notes().some(n => /Magnesium: 400 mg today from supplements is above the usual upper limit for adults \(350 mg\)/.test(n))).toBe(true)
+    expect(notes().some(n => /Iron/.test(n))).toBe(false)                        // 27 mg is under 45
+    await open(); await click(byText('button', 'Food only'))
+    expect(notes().some(n => /Zinc/.test(n))).toBe(true)                         // safety information does not depend on the display mode
+    expect(card().textContent).not.toMatch(/dangerous|toxic|warning|overdose|stop taking/i)
+  })
+
+  it('no card when the day carries no micros block (older server, or nothing loaded)', async () => {
+    m.api.getDay.mockResolvedValue(dayOf())
+    await mount(<Diary />)
+    expect(card()).toBeNull()
+  })
+})
+
+describe('More nutrients in the forms', () => {
+  const more = el => el.querySelector('.nut-more')
+  const headBtn = el => more(el).querySelector('.nut-more-h')
+  const mfield = (el, label) => more(el).querySelector(`input[aria-label="${label}"]`)
+
+  it('the food form has a collapsed "More nutrients" section; typed values are sent, empty boxes are not (never as 0)', async () => {
+    m.api.createFood.mockResolvedValue({})
+    openFoodSheet({ onSaved: vi.fn() })
+    const s = await showSheet()
+    expect(headBtn(s.el).getAttribute('aria-expanded')).toBe('false')
+    expect(more(s.el).querySelector('.nut-more-b')).toBeNull()
+    await setValue(s.el.querySelector('input[aria-label="Name"]'), 'Fortified oats')
+    await setValue(s.el.querySelector('input[aria-label="Calories"]'), '150')
+    await click(headBtn(s.el))
+    expect(headBtn(s.el).getAttribute('aria-expanded')).toBe('true')
+    expect([...more(s.el).querySelectorAll('.nut-section-t')].map(e => e.textContent)).toEqual(['Vitamins', 'Minerals', 'Other'])
+    expect(more(s.el).querySelectorAll('input').length).toBe(29)
+    await setValue(mfield(s.el, 'Calcium'), '120')
+    await setValue(mfield(s.el, 'Iron'), '0')
+    expect(headBtn(s.el).textContent).toContain('2 filled in')
+    await click(byText('button', 'Save'))
+    expect(m.api.createFood.mock.calls[0][0].micros).toEqual({ calcium_mg: 120, iron_mg: 0 })
+  })
+
+  it('a food saved with none sends no micros key at all; editing a food that had some can clear them', async () => {
+    m.api.createFood.mockResolvedValue({}); m.api.updateFood.mockResolvedValue({})
+    openFoodSheet({ onSaved: vi.fn() })
+    let s = await showSheet()
+    await setValue(s.el.querySelector('input[aria-label="Name"]'), 'Plain'); await setValue(s.el.querySelector('input[aria-label="Calories"]'), '90')
+    await click(byText('button', 'Save'))
+    expect('micros' in m.api.createFood.mock.calls[0][0]).toBe(false)
+    openFoodSheet({ food: { id: 'f1', source: 'custom', name: 'Multi', brand: '', serving: { label: '1 tab', grams: null }, per: { calories: 0, protein_g: 0, carbs_g: 0, fat_g: 0 }, micros: { iron_mg: 18 } }, onSaved: vi.fn() })
+    s = await showSheet()
+    expect(headBtn(s.el).textContent).toContain('1 filled in')
+    await click(headBtn(s.el))
+    expect(mfield(s.el, 'Iron').value).toBe('18')
+    await setValue(mfield(s.el, 'Iron'), '')
+    await click(byText('button', 'Save'))
+    expect(m.api.updateFood.mock.calls[0][1].micros).toEqual({})
+  })
+
+  it('Edit entry: micros are the entry’s totals, follow the amount (from the base), and can be typed; none → nothing is sent', async () => {
+    const entry = { id: 'e1', meal: 'breakfast', name: 'Cereal', source: 'food', serving: '40 g', qty: 1, grams: 40, calories: 152, protein_g: 3, carbs_g: 32, fat_g: 1, micros: { calcium_mg: 320, vit_d_mcg: 3 }, base: { calories: 152, protein_g: 3, carbs_g: 32, fat_g: 1, grams: 40, micros: { calcium_mg: 320, vit_d_mcg: 3 } } }
+    m.api.updateEntry.mockResolvedValue({})
+    openEditEntry({ entry, date: '2026-10-12', onSaved: vi.fn() })
+    const s = await showSheet()
+    await click(headBtn(s.el))
+    expect(mfield(s.el, 'Calcium').value).toBe('320')
+    await click(s.el.querySelector('[aria-label="Increase Servings"]'))                  // 1 → 1.5
+    expect(mfield(s.el, 'Calcium').value).toBe('480'); expect(mfield(s.el, 'Vitamin D').value).toBe('4.5')
+    await click(byText('button', 'Save'))
+    const patch = m.api.updateEntry.mock.calls[0][2]
+    expect(patch.micros).toEqual({ calcium_mg: 480, vit_d_mcg: 4.5 })
+    expect(patch.base.micros).toEqual({ calcium_mg: 320, vit_d_mcg: 3 })
+    expect(patch.qty).toBe(1.5)
+  })
+
+  it('Edit entry: a number typed by hand after changing the amount is kept; an entry with no micros sends none (old entries open and save as before)', async () => {
+    const entry = { id: 'e1', meal: 'breakfast', name: 'Cereal', source: 'food', serving: '40 g', qty: 1, grams: 40, calories: 152, protein_g: 3, carbs_g: 32, fat_g: 1, micros: { calcium_mg: 320 }, base: { calories: 152, protein_g: 3, carbs_g: 32, fat_g: 1, grams: 40, micros: { calcium_mg: 320 } } }
+    m.api.updateEntry.mockResolvedValue({})
+    openEditEntry({ entry, date: '2026-10-12', onSaved: vi.fn() })
+    let s = await showSheet()
+    await click(headBtn(s.el))
+    await click(s.el.querySelector('[aria-label="Increase Servings"]'))
+    await setValue(mfield(s.el, 'Calcium'), '500')
+    await click(s.el.querySelector('[aria-label="Increase Servings"]'))                  // 2 servings: the typed number stays
+    expect(mfield(s.el, 'Calcium').value).toBe('500')
+    const old = { id: 'o', meal: 'lunch', name: 'Old', source: 'quick', calories: 300, protein_g: 10, carbs_g: 30, fat_g: 5 }
+    openEditEntry({ entry: old, date: '2026-10-12', onSaved: vi.fn() })
+    s = await showSheet()
+    await setValue(s.el.querySelector('.nut-input input[aria-label="Calories"]'), '310')
+    await click(byText('button', 'Save'))
+    expect('micros' in m.api.updateEntry.mock.calls.at(-1)[2]).toBe(false)
+    expect(headBtn(s.el).textContent).not.toContain('filled in')
+  })
+
+  it('Quick add has the section too; only typed values are sent, so a quick add never has guessed ones', async () => {
+    m.api.addEntries.mockResolvedValue({})
+    openAddSheet({ date: '2026-10-12', meal: 'snack', onSaved: vi.fn() })
+    const s = await showSheet()
+    await click(byText('button', 'Quick add'))
+    await setValue(s.el.querySelector('input[aria-label="Calories"]'), '120')
+    await click([...s.el.querySelectorAll('button')].find(b => b.textContent.startsWith('Add to')))
+    expect('micros' in m.api.addEntries.mock.calls[0][0]).toBe(false)
+    openAddSheet({ date: '2026-10-12', meal: 'snack', onSaved: vi.fn() })
+    const s2 = await showSheet()
+    await click(byText('button', 'Quick add'))
+    await setValue(s2.el.querySelector('input[aria-label="Calories"]'), '120')
+    await click(headBtn(s2.el))
+    await setValue(mfield(s2.el, 'Sodium'), '140')
+    await click([...s2.el.querySelectorAll('button')].find(b => b.textContent.startsWith('Add to')))
+    expect(m.api.addEntries.mock.calls[1][0].micros).toEqual({ sodium_mg: 140 })
+  })
+
+  it('a search result’s micros travel with the snapshot when it is logged, and a result without any sends none', async () => {
+    const HIT = { source: 'off', kind: 'off', rank: 1180, ext: '9', name: 'Fortified cereal', brand: 'Acme', bases: [{ label: '40 g', grams: 40, per: { calories: 152, protein_g: 3, carbs_g: 32, fat_g: 1 }, micros: { calcium_mg: 320 } }] }
+    mockSearch({ off: [HIT, { ...HIT, ext: '10', name: 'Fortified cereal two', bases: [{ ...HIT.bases[0], micros: undefined }] }] })
+    m.api.addEntries.mockResolvedValue({})
+    openAddSheet({ date: '2026-10-12', meal: 'snack', onSaved: vi.fn() })
+    const s = await showSheet()
+    await setValue(s.el.querySelector('input[placeholder="Search foods"]'), 'fortified'); await wait(520)
+    await click(s.el.querySelectorAll('.nut-pick')[0]); await click(byText('button', 'Add to snacks'))
+    expect(m.api.addEntries.mock.calls[0][0].food.micros).toEqual({ calcium_mg: 320 })
+  })
+})

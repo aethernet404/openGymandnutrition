@@ -15,6 +15,7 @@ import path from 'node:path';
 import * as health from './health.js';
 import * as hae from './hae.js';
 import * as haeDebug from './hae-debug.js';
+import { scaleMicros } from './micros.js';
 import { createWindow, createBackoff } from '../rate-limit.js';
 import { createAnalyzer, availability, checkInput, FAILURES } from './analyze.js';
 
@@ -103,7 +104,9 @@ export function nutritionRoutes({
     for (const k of ['protein_g', 'carbs_g', 'fat_g']) e[k] = v.round(f.per[k] * q, 1);
     e.name ||= f.name; e.brand ||= f.brand; e.serving ||= f.serving.label;
     if (e.grams === undefined && f.serving.grams) e.grams = v.round(f.serving.grams * q, 1);
-    if (!e.base) e.base = { calories: f.per.calories, protein_g: f.per.protein_g, carbs_g: f.per.carbs_g, fat_g: f.per.fat_g, grams: f.serving.grams || null };
+    // Micronutrients are copied onto the entry, scaled by what was eaten (unknown stays unknown: no key, never 0).
+    if (e.micros === undefined) { const m = scaleMicros(f.micros, q); if (m) e.micros = m; }
+    if (!e.base) e.base = { calories: f.per.calories, protein_g: f.per.protein_g, carbs_g: f.per.carbs_g, fat_g: f.per.fat_g, grams: f.serving.grams || null, ...(f.micros ? { micros: f.micros } : {}) };
     delete e.needsFood;
     return null;
   }
@@ -232,8 +235,9 @@ export function nutritionRoutes({
         const existing = check ? store.findSavedFood(d, checked.value.name, checked.value.brand) : null;
         if (existing && !choice) return { duplicate: existing };
         if (existing && choice === 'update') {
-          const { serving, per, origin } = checked.value;
-          Object.assign(existing, { serving, per }, origin ? { origin } : {});
+          const { serving, per, origin, micros } = checked.value;
+          Object.assign(existing, { serving, per }, origin ? { origin } : {}, micros !== undefined ? { micros } : {});
+          if (existing.micros == null) delete existing.micros;
           return { food: existing, updated: true };
         }
         return { food: store.addFood(d, { ...checked.value, source: 'custom' }) };
@@ -257,7 +261,9 @@ export function nutritionRoutes({
         if (f.source === 'fatsecret' && checked.value.favorite) return { refused: 'fatsecret' };
         const patch = f.source === 'custom' ? checked.value : { favorite: checked.value.favorite ?? f.favorite };
         delete patch.source;
-        return Object.assign(f, patch);
+        Object.assign(f, patch);
+        if (f.micros == null) delete f.micros;
+        return f;
       });
       if (food?.refused) return fail(res, 400, 'FatSecret’s terms do not allow keeping their foods. Use “Add it as my food” on the barcode result, or create it under My foods, to keep a copy.');
       if (!food) return fail(res, 404, 'no such food');

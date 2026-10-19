@@ -1,6 +1,8 @@
 // Pure helpers behind the diary screens: dates, progress, form parsing. No React, no network —
 // so they can be unit-tested, like everything else in lib/ that decides what a number means.
 
+import { cleanMicros, hasMicros, scaleMicros } from './micros.js'
+
 export const MEALS = ['breakfast', 'lunch', 'dinner', 'snack']
 export const MEAL_LABEL = { breakfast: 'Breakfast', lunch: 'Lunch', dinner: 'Dinner', snack: 'Snacks' }
 export const MACRO_KEYS = ['protein_g', 'carbs_g', 'fat_g']
@@ -88,7 +90,7 @@ export function quickBody({ name, meal, calories, protein_g, carbs_g, fat_g }, d
 }
 
 /** Custom-food form → request body. */
-export function foodBody({ name, brand, serving, grams, calories, protein_g, carbs_g, fat_g, ext }) {
+export function foodBody({ name, brand, serving, grams, calories, protein_g, carbs_g, fat_g, ext, micros }) {
   if (!String(name || '').trim()) return { ok: false, error: 'A food needs a name' }
   const nums = { calories, protein_g, carbs_g, fat_g }
   for (const [k, v] of Object.entries(nums)) if (v != null && !(Number.isFinite(v) && v >= 0)) return { ok: false, error: `${MACRO_LABEL[k]} must be a number from 0 up` }
@@ -99,7 +101,9 @@ export function foodBody({ name, brand, serving, grams, calories, protein_g, car
     body: {
       name: String(name).trim(), brand: String(brand || '').trim(), serving: String(serving || '').trim() || '1 serving',
       grams: grams || null, ext: String(ext || '').trim() || null,
-      per: { calories, protein_g: protein_g ?? 0, carbs_g: carbs_g ?? 0, fat_g: fat_g ?? 0 }
+      per: { calories, protein_g: protein_g ?? 0, carbs_g: carbs_g ?? 0, fat_g: fat_g ?? 0 },
+      // Micronutrients for one serving: only the ones filled in (given as `micros`; an empty object clears them on an edit).
+      ...(micros !== undefined ? { micros: cleanMicros(micros) } : {})
     }
   }
 }
@@ -198,11 +202,12 @@ export function entryBase(e) {
   const qty = Number.isFinite(e.qty) && e.qty > 0 ? e.qty : 1
   const b = e.base
   if (b && Number.isFinite(b.calories)) {
-    return { per: { calories: cleanNum(b.calories), protein_g: cleanNum(b.protein_g), carbs_g: cleanNum(b.carbs_g), fat_g: cleanNum(b.fat_g) }, gramsPer: b.grams > 0 ? b.grams : null, qty }
+    return { per: { calories: cleanNum(b.calories), protein_g: cleanNum(b.protein_g), carbs_g: cleanNum(b.carbs_g), fat_g: cleanNum(b.fat_g) }, gramsPer: b.grams > 0 ? b.grams : null, qty, micros: cleanMicros(b.micros) }
   }
   const per = {}
   for (const k of MACRO_KEYS_ALL) per[k] = Math.round(cleanNum(e[k]) / qty * 1000) / 1000
-  return { per, gramsPer: e.grams > 0 ? Math.round(e.grams / qty * 100) / 100 : null, qty }
+  // Micronutrients per unit, only the ones the entry knows (no micros → none; never zeros).
+  return { per, gramsPer: e.grams > 0 ? Math.round(e.grams / qty * 100) / 100 : null, qty, micros: scaleMicros(cleanMicros(e.micros), 1 / qty) }
 }
 const MACRO_KEYS_ALL = ['calories', 'protein_g', 'carbs_g', 'fat_g']
 
@@ -228,7 +233,8 @@ export const qtyForGramsOf = (base, g) => (base.gramsPer && Number.isFinite(g) &
 /** The fields to send when the amount changed: the amount, the weight, and the unchanging base (stored with the entry). */
 export function amountPatch(base, qty) {
   const g = gramsForQty(base, qty)
-  return { qty, ...(g != null ? { grams: g } : {}), base: { ...base.per, grams: base.gramsPer } }
+  const mi = scaleMicros(base.micros, qty)
+  return { qty, ...(g != null ? { grams: g } : {}), ...(hasMicros(mi) ? { micros: mi } : {}), base: { ...base.per, grams: base.gramsPer, ...(hasMicros(base.micros) ? { micros: base.micros } : {}) } }
 }
 
 /* ---------- saving an estimate or an entry as a reusable food ---------- */
@@ -250,6 +256,7 @@ export function foodFromEntry(entry) {
     name: String(entry.name || '').trim(), brand: String(entry.brand || '').trim(),
     serving: String(entry.serving || '').trim(), grams: base.gramsPer != null ? r1(base.gramsPer) : null,
     calories: Math.round(base.per.calories), protein_g: r1(base.per.protein_g), carbs_g: r1(base.per.carbs_g), fat_g: r1(base.per.fat_g),
+    ...(hasMicros(base.micros) ? { micros: base.micros } : {}),
     origin: entry.source === 'ai' ? 'ai' : null
   }
 }
@@ -262,7 +269,7 @@ export function savedFoodBody(f, { origin = f.origin, choice = null } = {}) {
   const r = foodBody(f)
   if (!r.ok) return r
   const { ext: _e, ...body } = r.body
-  return { ok: true, body: { ...body, ...(origin ? { origin } : {}), checkDuplicate: true, ...(choice ? { onDuplicate: choice } : {}) } }
+  return { ok: true, body: { ...body, ...(origin ? { origin } : {}), checkDuplicate: true, ...(choice ? { onDuplicate: choice } : {}) } }   // micros ride along inside body when the form had any
 }
 
 /**

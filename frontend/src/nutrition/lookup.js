@@ -18,7 +18,7 @@ export function barcodeOf(s) {
 
 /** What gets sent with an entry so the server can keep the food as a recent. */
 export function snapshotOf(hit, base) {
-  return { name: hit.name, brand: hit.brand || '', source: hit.source, ext: hit.ext, serving: base.label, grams: base.grams ?? null, per: base.per }
+  return { name: hit.name, brand: hit.brand || '', source: hit.source, ext: hit.ext, serving: base.label, grams: base.grams ?? null, per: base.per, ...(base.micros && Object.keys(base.micros).length ? { micros: base.micros } : {}) }
 }
 
 /** The portion the user is most likely to want: the label serving if there is one, else 100 g. */
