@@ -9,6 +9,7 @@ import { nt } from './i18n.js'
 import * as nutri from './api.js'
 import { openAddSheet, openEditEntry, openSaveFood } from './sheets.jsx'
 import MicrosCard from './MicrosCard.jsx'
+import { openSupplementSheet } from './Supplements.jsx'
 import { useStore } from '../store/useStore.js'
 import { EMPTY_TOTALS, MACRO_KEYS, foodFromEntry, MACRO_LABEL, MEALS, MEAL_LABEL, burnedOf, fraction, goalWithEatBack, macroLine, mealForHour, netOf, relativeDay, remaining, shiftISO, signed, sparkPath, trim, updatedText, validISO, weightText, weightTrend, workoutLine } from './diary.js'
 import './nutrition.css'
@@ -105,18 +106,21 @@ function WeightCard({ weight, unit, onSetup }) {
 }
 
 function MealCard({ meal, entries, totals, onAdd, onEdit }) {
+  const supplements = meal === 'supplements'
   return <div className="card nut-meal">
     <div className="row between nut-meal-h">
-      <div><h2>{nt(MEAL_LABEL[meal])}</h2>{entries.length > 0 && <span className="muted small">{nf(totals.calories)} kcal</span>}</div>
+      <div><h2>{nt(MEAL_LABEL[meal])}</h2>{entries.length > 0 && (!supplements || totals.calories > 0) && <span className="muted small">{nf(totals.calories)} kcal</span>}</div>
       <Button size="sm" icon="plus" onClick={onAdd} aria-label={nt('Add to {0}', nt(MEAL_LABEL[meal]).toLowerCase())}>{nt('Add')}</Button>
     </div>
     {entries.length === 0 ? <div className="dim small nut-none">{nt('Nothing logged')}</div> : <div className="nut-entries">
       {entries.map(e => <div key={e.id} className="nut-entry tap" {...tappable(() => onEdit(e))}>
         <div className="nut-entry-m">
           <div className="nut-entry-t">{e.name}{e.source === 'ai' && <Icon name="sparkles" className="nut-ai" aria-label={nt('Estimated by AI')} />}</div>
-          <div className="nut-entry-s">{e.source === 'food' && e.serving ? `${trim(e.qty)} × ${e.serving} · ` : ''}{macroLine(e)}</div>
+          <div className="nut-entry-s">{supplements
+            ? [e.serving ? `${trim(e.qty)} × ${e.serving}` : trim(e.qty) + ' ×', e.micros && Object.keys(e.micros).length ? nt('{0} nutrients', Object.keys(e.micros).length) : null].filter(Boolean).join(' · ')
+            : <>{e.source === 'food' && e.serving ? `${trim(e.qty)} × ${e.serving} · ` : ''}{macroLine(e)}</>}</div>
         </div>
-        <div className="nut-kcal">{nf(e.calories)}</div>
+        {(!supplements || e.calories > 0) && <div className="nut-kcal">{nf(e.calories)}</div>}
       </div>)}
     </div>}
   </div>
@@ -199,6 +203,9 @@ export default function Diary() {
       {MEALS.map(m => <MealCard key={m} meal={m} entries={byMeal(m)} totals={day.byMeal?.[m] || EMPTY_TOTALS}
         onAdd={() => openAddSheet({ date, meal: m, onSaved: afterAdd })}
         onEdit={e => openEditEntry({ entry: e, date, onSaved: load })} />)}
+      <MealCard meal="supplements" entries={byMeal('supplements')} totals={day.byMeal?.supplements || EMPTY_TOTALS}
+        onAdd={() => openSupplementSheet({ date, onSaved: load })}
+        onEdit={e => openEditEntry({ entry: e, date, onSaved: load })} />
       {!day.entries.length && <div className="nut-center muted small" style={{ margin: '6px 0 14px' }}>
         <Button variant="primary" icon="plus" onClick={() => openAddSheet({ date, meal: defaultMeal, onSaved: afterAdd })}>{nt('Log your first food')}</Button>
       </div>}

@@ -59,6 +59,12 @@ describe('nutrition layout survives narrow screens and large text', () => {
     expect(rule('.nut-mrow-t')).toMatch(/flex-wrap:wrap/)
     expect(rule('.nut-mbar')).not.toMatch(/(^|;)\s*width:/)
   })
+  it('the supplements sheet: the stack bar, nutrient chips and stack rows wrap and shrink', () => {
+    for (const sel of ['.nut-stackbar', '.nut-chips']) expect(rule(sel), sel).toMatch(/flex-wrap:wrap/)
+    expect(rule('.nut-stack-row')).toMatch(/flex-wrap:wrap/)
+    for (const sel of ['.nut-stackbar>*', '.nut-qn', '.nut-stack-row', '.nut-stack-pick']) expect(rule(sel), sel).toMatch(/min-width:0/)
+    expect(rule('.nut-chip')).toMatch(/overflow-wrap:anywhere/)
+  })
   it('long names and messages wrap instead of widening the page', () => {
     expect(rule('.nut')).toMatch(/min-width:0/)
     expect(css).toMatch(/\.nut-banner[^{]*\{[^}]*overflow-wrap:anywhere/)

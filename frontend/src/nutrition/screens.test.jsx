@@ -22,7 +22,7 @@ const m = vi.hoisted(() => ({
   api: {
     getDay: vi.fn(), getConfig: vi.fn(), addEntries: vi.fn(), updateEntry: vi.fn(), deleteEntry: vi.fn(),
     listFoods: vi.fn(), createFood: vi.fn(), updateFood: vi.fn(), deleteFood: vi.fn(), getGoals: vi.fn(), putGoals: vi.fn(),
-    getAdmin: vi.fn(), putAdmin: vi.fn(), getRange: vi.fn(), searchFoods: vi.fn(), lookupBarcode: vi.fn(), testUsda: vi.fn(), testFatsecret: vi.fn(), analyze: vi.fn(), setCoachShare: vi.fn(), createHealthToken: vi.fn(), revokeHealthToken: vi.fn(), putHealthSettings: vi.fn(), getHealthToken: vi.fn(), getWeight: vi.fn(), getHealthHistory: vi.fn(), getHealthDebug: vi.fn(), clearHealthDebug: vi.fn()
+    getAdmin: vi.fn(), putAdmin: vi.fn(), getRange: vi.fn(), searchFoods: vi.fn(), lookupBarcode: vi.fn(), testUsda: vi.fn(), testFatsecret: vi.fn(), getStack: vi.fn(), putStack: vi.fn(), analyze: vi.fn(), setCoachShare: vi.fn(), createHealthToken: vi.fn(), revokeHealthToken: vi.fn(), putHealthSettings: vi.fn(), getHealthToken: vi.fn(), getWeight: vi.fn(), getHealthHistory: vi.fn(), getHealthDebug: vi.fn(), clearHealthDebug: vi.fn()
   }
 }))
 
@@ -1137,7 +1137,7 @@ describe('Home card, router, goals, foods', () => {
     await click(host.querySelector('[aria-label="Add to favourites"]'))
     expect(m.api.updateFood).toHaveBeenCalledWith('f1', { favorite: true })
     await click(byText('button', 'Favourites'))
-    expect(m.api.listFoods).toHaveBeenLastCalledWith('favorite', '')
+    expect(m.api.listFoods).toHaveBeenLastCalledWith('favorite', '', '')
   })
 })
 
@@ -2257,5 +2257,204 @@ describe('More nutrients in the forms', () => {
     await setValue(s.el.querySelector('input[placeholder="Search foods"]'), 'fortified'); await wait(520)
     await click(s.el.querySelectorAll('.nut-pick')[0]); await click(byText('button', 'Add to snacks'))
     expect(m.api.addEntries.mock.calls[0][0].food.micros).toEqual({ calcium_mg: 320 })
+  })
+})
+
+/* ------------------------------ Vitamins & supplements ------------------------------ */
+
+describe('Vitamins & supplements', () => {
+  const SUP = { id: 's1', source: 'custom', type: 'supplement', name: 'Daily multi', brand: 'Acme', favorite: false, serving: { label: '1 tablet', grams: null }, per: { calories: 0, protein_g: 0, carbs_g: 0, fat_g: 0 }, micros: { vit_d_mcg: 25, iron_mg: 18 } }
+  const GUM = { ...SUP, id: 's2', name: 'Gummies', serving: { label: '2 gummies', grams: null }, per: { calories: 15, protein_g: 0, carbs_g: 4, fat_g: 0 }, micros: { vit_c_mg: 60 } }
+  const supEntries = [
+    { id: 'p1', meal: 'supplements', name: 'Daily multi', source: 'food', serving: '1 tablet', qty: 2, calories: 0, protein_g: 0, carbs_g: 0, fat_g: 0, micros: { vit_d_mcg: 50, iron_mg: 36 } },
+    { id: 'p2', meal: 'supplements', name: 'Gummies', source: 'food', serving: '2 gummies', qty: 1, calories: 15, protein_g: 0, carbs_g: 4, fat_g: 0, micros: { vit_c_mg: 60 } }
+  ]
+  const openSheet = async (date = '2026-10-12') => {
+    m.api.getDay.mockResolvedValue(dayOf())
+    m.api.getStack = m.api.getStack || vi.fn()
+    await mount(<Diary />)
+    await click(host.querySelector('[aria-label="Add to vitamins & supplements"]'))
+    return showSheet()
+  }
+
+  it('the section sits directly below Snacks, built like the meal sections, with its own Add button', async () => {
+    m.api.getDay.mockResolvedValue(dayOf({ entries: supEntries, byMeal: { ...dayOf().byMeal, supplements: { calories: 15, protein_g: 0, carbs_g: 4, fat_g: 0 } } }))
+    await mount(<Diary />)
+    const cards = [...host.querySelectorAll('.nut-meal')]
+    expect(cards.map(c => c.querySelector('h2').textContent)).toEqual(['Breakfast', 'Lunch', 'Dinner', 'Snacks', 'Vitamins & supplements'])
+    const sec = cards[4]
+    expect(sec.querySelector('button[aria-label="Add to vitamins & supplements"]')).toBeTruthy()
+    expect(cards[3].nextElementSibling).toBe(sec)
+    const rows = [...sec.querySelectorAll('.nut-entry')]
+    expect(rows[0].textContent).toContain('Daily multi'); expect(rows[0].textContent).toContain('2 × 1 tablet · 2 nutrients')
+    expect(rows[0].querySelector('.nut-kcal')).toBeNull()                       // 0 kcal: not shown, so supplements do not look like calories
+    expect(rows[1].querySelector('.nut-kcal').textContent).toBe('15')           // gummies do have calories
+    expect(sec.querySelector('.nut-meal-h .muted').textContent).toContain('15 kcal')
+  })
+
+  it('an empty section says so; a supplement entry opens the usual Edit entry without a meal picker', async () => {
+    m.api.getDay.mockResolvedValue(dayOf({ entries: [supEntries[0]] }))
+    await mount(<Diary />)
+    await click([...host.querySelectorAll('.nut-meal')][4].querySelector('.nut-entry'))
+    const s = await showSheet()
+    expect(s.el.textContent).toContain('Edit entry')
+    expect(s.el.textContent).not.toContain('Meal')
+    expect(byText('button', 'Save as supplement')).toBeTruthy()
+    expect(s.el.textContent).toContain('to My supplements')
+  })
+
+  it('Add opens the supplements sheet (stack, My supplements, New); saved supplements are asked for as type supplement; Close is there', async () => {
+    m.api.listFoods.mockResolvedValue({ foods: [SUP, GUM] }); m.api.getStack.mockResolvedValue({ items: [] })
+    const s = await openSheet()
+    await flush()
+    expect(s.el.textContent).toContain('Vitamins & supplements')
+    expect(m.api.listFoods).toHaveBeenCalledWith('recent', '', 'supplement')
+    expect([...s.el.querySelectorAll('.nut-pick-t')].map(e => e.textContent)).toEqual(['Daily multi', 'Gummies'])
+    expect(s.el.querySelector('.nut-pick').textContent).toContain('2 nutrients')
+    expect(byText('button', 'Close')).toBeTruthy(); expect(byText('button', 'New')).toBeTruthy()
+    expect(byText('button', 'Set up my stack')).toBeTruthy()
+    expect(byText('button', 'Log my usual stack').disabled).toBe(true)
+  })
+
+  it('one tap logs a saved supplement again: servings stepper, the entry goes in by id as meal supplements; no AI call, no photo', async () => {
+    m.api.listFoods.mockResolvedValue({ foods: [SUP] }); m.api.getStack.mockResolvedValue({ items: [] }); m.api.addEntries.mockResolvedValue({ entries: [] })
+    const s = await openSheet(); await flush()
+    await click(s.el.querySelector('.nut-pick'))
+    expect(s.el.textContent).toContain('One serving: 1 tablet')
+    await click(s.el.querySelector('[aria-label="Increase Servings"]'))
+    await click(byText('button', 'Add to supplements'))
+    expect(m.api.addEntries).toHaveBeenCalledWith({ date: today, meal: 'supplements', source: 'food', foodId: 's1', qty: 2 })
+    expect(m.api.analyze).not.toHaveBeenCalled()
+    expect(m.toast).toHaveBeenCalledWith('Added')
+  })
+
+  it('a saved supplement can be edited or deleted through the usual food sheet', async () => {
+    m.api.listFoods.mockResolvedValue({ foods: [SUP] }); m.api.getStack.mockResolvedValue({ items: [] })
+    const s = await openSheet(); await flush()
+    await click(s.el.querySelector('.nut-pick'))
+    await click(byText('button', 'Edit this supplement'))
+    const sheet = await showSheet()
+    expect(sheet.el.querySelector('h3').textContent).toContain('Supplement')
+    expect(sheet.el.querySelector('input[aria-label="Name"]').disabled).toBe(false)
+    expect(byText('button', 'Delete')).toBeTruthy()
+  })
+
+  it('New supplement: quick chips add the common nutrients, calories default to 0, it is saved (default on) as type supplement and logged by id', async () => {
+    m.api.listFoods.mockResolvedValue({ foods: [] }); m.api.getStack.mockResolvedValue({ items: [] })
+    m.api.createFood.mockResolvedValue({ food: { id: 'new1' } }); m.api.addEntries.mockResolvedValue({ entries: [] })
+    const s = await openSheet(); await flush()
+    await click(byText('button', 'New'))
+    await setValue(s.el.querySelector('input[aria-label="Supplement name"]'), 'Vitamin D3 2000 IU')
+    await setValue(s.el.querySelector('input[aria-label="Serving"]'), '1 softgel')
+    expect(s.el.querySelectorAll('.nut-chip').length).toBe(10)
+    await click(byText('button', '+ Vitamin D'))
+    expect(byText('button', '+ Vitamin D')).toBeUndefined()                  // the chip became a box
+    await setValue(s.el.querySelector('input[aria-label="Vitamin D"]'), '50')
+    await click(s.el.querySelector('[aria-label="Increase Servings taken"]'))
+    expect(s.el.querySelector('[role="switch"][aria-checked="true"]')).toBeTruthy()      // Save to My supplements: on by default
+    await click(byText('button', 'Add to supplements'))
+    expect(m.api.createFood.mock.calls[0][0]).toEqual({ name: 'Vitamin D3 2000 IU', brand: '', serving: '1 softgel', grams: null, per: { calories: 0, protein_g: 0, carbs_g: 0, fat_g: 0 }, micros: { vit_d_mcg: 50 }, type: 'supplement', checkDuplicate: true })
+    expect(m.api.addEntries).toHaveBeenCalledWith({ date: today, meal: 'supplements', source: 'food', foodId: 'new1', qty: 2 })
+    expect(m.toast).toHaveBeenCalledWith('Saved to My supplements and added')
+  })
+
+  it('New supplement with Save off: logged once with its own numbers scaled by the servings, nothing saved', async () => {
+    m.api.listFoods.mockResolvedValue({ foods: [] }); m.api.getStack.mockResolvedValue({ items: [] }); m.api.addEntries.mockResolvedValue({ entries: [] })
+    const s = await openSheet(); await flush()
+    await click(byText('button', 'New'))
+    await setValue(s.el.querySelector('input[aria-label="Supplement name"]'), 'Gummy')
+    await setValue(s.el.querySelector('input[aria-label="Calories per serving"]'), '15')
+    await click(byText('button', '+ Vitamin C')); await setValue(s.el.querySelector('input[aria-label="Vitamin C"]'), '60')
+    await click(s.el.querySelector('[aria-label="Increase Servings taken"]'))
+    await click(s.el.querySelector('[role="switch"]'))                                         // Save: off
+    expect(s.el.textContent).toContain('Only logged today')
+    await click(byText('button', 'Add to supplements'))
+    expect(m.api.createFood).not.toHaveBeenCalled()
+    expect(m.api.addEntries).toHaveBeenCalledWith({ date: today, meal: 'supplements', source: 'supplement', name: 'Gummy', brand: '', serving: '1 serving', qty: 2, calories: 30, protein_g: 0, carbs_g: 0, fat_g: 0, micros: { vit_c_mg: 120 }, base: { calories: 15, protein_g: 0, carbs_g: 0, fat_g: 0, grams: null, micros: { vit_c_mg: 60 } } })
+  })
+
+  it('New supplement: a name is required, a bad amount is refused in words, an empty box is never sent as 0, a duplicate is asked inline', async () => {
+    m.api.listFoods.mockResolvedValue({ foods: [] }); m.api.getStack.mockResolvedValue({ items: [] })
+    const s = await openSheet(); await flush()
+    await click(byText('button', 'New'))
+    await click(byText('button', 'Add to supplements'))
+    expect(m.toast).toHaveBeenCalledWith('A food needs a name')
+    expect(m.api.createFood).not.toHaveBeenCalled()
+    await setValue(s.el.querySelector('input[aria-label="Supplement name"]'), 'Zinc')
+    await click(byText('button', '+ Zinc')); await setValue(s.el.querySelector('input[aria-label="Zinc"]'), '15')
+    await click(byText('button', '+ Iron'))                                                       // opened but left empty
+    m.api.createFood.mockRejectedValueOnce(apiError('dup', 409, { code: 'duplicate', existing: { id: 'z', name: 'Zinc', serving: { label: '1 tablet' }, per: { calories: 0 } } }))
+    await click(byText('button', 'Add to supplements'))
+    expect(m.api.createFood.mock.calls[0][0].micros).toEqual({ zinc_mg: 15 })
+    expect(s.el.textContent).toContain('You already have “Zinc” saved')
+    m.api.createFood.mockResolvedValue({ food: { id: 'z' }, updated: true }); m.api.addEntries.mockResolvedValue({ entries: [] })
+    await click(byText('button', 'Update the saved food'))
+    expect(m.api.createFood.mock.calls.at(-1)[0]).toMatchObject({ onDuplicate: 'update', type: 'supplement' })
+    expect(m.api.addEntries).toHaveBeenCalledWith(expect.objectContaining({ foodId: 'z', meal: 'supplements' }))
+  })
+
+  it('My usual stack: one button logs every saved supplement in it, with its servings, in one request', async () => {
+    m.api.listFoods.mockResolvedValue({ foods: [SUP, GUM] }); m.api.getStack.mockResolvedValue({ items: [{ foodId: 's1', qty: 1 }, { foodId: 's2', qty: 2 }] }); m.api.addEntries.mockResolvedValue({ entries: [] })
+    const s = await openSheet(); await flush()
+    expect(byText('button', 'Log my usual stack (2)')).toBeTruthy()
+    await click(byText('button', 'Log my usual stack (2)'))
+    expect(m.api.addEntries).toHaveBeenCalledTimes(1)
+    expect(m.api.addEntries).toHaveBeenCalledWith({ date: today, meal: 'supplements', entries: [{ source: 'food', foodId: 's1', qty: 1 }, { source: 'food', foodId: 's2', qty: 2 }] })
+    expect(m.toast).toHaveBeenCalledWith('Logged 2 supplements')
+    expect(s.close).toHaveBeenCalled()
+  })
+
+  it('setting up the stack: pick saved supplements and servings, save it, or save and log it now', async () => {
+    m.api.listFoods.mockResolvedValue({ foods: [SUP, GUM] }); m.api.getStack.mockResolvedValue({ items: [] }); m.api.putStack.mockResolvedValue({}); m.api.addEntries.mockResolvedValue({ entries: [] })
+    const s = await openSheet(); await flush()
+    await click(byText('button', 'Set up my stack'))
+    expect(s.el.textContent).toContain('My usual stack')
+    expect(byText('button', 'Save stack and log it now').disabled).toBe(true)
+    const picks = () => [...s.el.querySelectorAll('.nut-stack-pick')]
+    await click(picks()[0]); await click(picks()[1])
+    expect(picks().every(p => p.getAttribute('aria-pressed') === 'true')).toBe(true)
+    await click(s.el.querySelector('[aria-label="Increase Servings of Gummies"]'))
+    await click(byText('button', 'Save stack and log it now'))
+    expect(m.api.putStack).toHaveBeenCalledWith([{ foodId: 's1', qty: 1 }, { foodId: 's2', qty: 2 }].sort((a, b) => 0))
+    expect(m.api.addEntries).toHaveBeenCalledWith({ date: today, meal: 'supplements', entries: [{ source: 'food', foodId: 's1', qty: 1 }, { source: 'food', foodId: 's2', qty: 2 }] })
+  })
+
+  it('Save as supplement from an existing supplement entry: type supplement, per serving, not the total', async () => {
+    openEditEntry({ entry: { ...supEntries[0], base: { calories: 0, protein_g: 0, carbs_g: 0, fat_g: 0, grams: null, micros: { vit_d_mcg: 25, iron_mg: 18 } } }, date: '2026-10-12', onSaved: vi.fn() })
+    await showSheet()
+    m.api.createFood.mockResolvedValue({ food: { id: 'f' } })
+    await click(byText('button', 'Save as supplement'))
+    const sheet = await showSheet()
+    expect(sheet.el.querySelector('h3').textContent).toBe('Save as a supplement')
+    await click(byText('button', 'Save to My supplements'))
+    expect(m.api.createFood.mock.calls[0][0]).toMatchObject({ name: 'Daily multi', serving: '1 tablet', type: 'supplement', micros: { vit_d_mcg: 25, iron_mg: 18 }, checkDuplicate: true })
+  })
+
+  it('My foods page: a Foods / Supplements switch; supplements are listed with type supplement and New makes a supplement', async () => {
+    m.api.listFoods.mockResolvedValue({ foods: [SUP] })
+    await mount(<Foods />)
+    expect(m.api.listFoods).toHaveBeenLastCalledWith('all', '', '')
+    await click(byText('button', 'Supplements'))
+    await flush()
+    expect(m.api.listFoods).toHaveBeenLastCalledWith('all', '', 'supplement')
+    expect(text()).toContain('My supplements'); expect(text()).toContain('Daily multi')
+    m.api.createFood.mockResolvedValue({})
+    await click(byText('button', 'New'))
+    const s = await showSheet()
+    expect(s.el.querySelector('h3').textContent).toContain('New supplement')
+    await setValue(s.el.querySelector('input[aria-label="Name"]'), 'Omega 3'); await setValue(s.el.querySelector('input[aria-label="Calories"]'), '0')
+    await click(byText('button', 'Save'))
+    expect(m.api.createFood.mock.calls[0][0].type).toBe('supplement')
+  })
+
+  it('supplements count in the Micronutrients card only when Food + supplements is on', async () => {
+    try { localStorage.clear() } catch {}
+    m.api.getDay.mockResolvedValue(dayOf({ entries: supEntries, micros: { food: { totals: { vit_d_mcg: 2 }, withData: 1, entries: 1 }, supplements: { totals: { vit_d_mcg: 50, iron_mg: 36 }, withData: 2, entries: 2 } } }))
+    await mount(<Diary />)
+    await click(host.querySelector('.nut-micros-h'))
+    const rows = () => [...host.querySelectorAll('.nut-micros .nut-mrow')].map(r => r.textContent).join('|')
+    expect(rows()).toMatch(/Vitamin D52 mcg/); expect(rows()).toContain('Iron')
+    await click(byText('button', 'Food only'))
+    expect(rows()).toMatch(/Vitamin D2 mcg/); expect(rows()).not.toContain('Iron')
   })
 })

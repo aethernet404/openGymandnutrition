@@ -4,7 +4,9 @@
 import { cleanMicros, hasMicros, scaleMicros } from './micros.js'
 
 export const MEALS = ['breakfast', 'lunch', 'dinner', 'snack']
-export const MEAL_LABEL = { breakfast: 'Breakfast', lunch: 'Lunch', dinner: 'Dinner', snack: 'Snacks' }
+export const MEAL_LABEL = { breakfast: 'Breakfast', lunch: 'Lunch', dinner: 'Dinner', snack: 'Snacks', supplements: 'Vitamins & supplements' }
+// The supplements section is a meal of its own for entries, but not one you can pick for food (MEALS stays food only).
+export const SUPPLEMENTS = 'supplements'
 export const MACRO_KEYS = ['protein_g', 'carbs_g', 'fat_g']
 export const MACRO_LABEL = { calories: 'Calories', protein_g: 'Protein', carbs_g: 'Carbs', fat_g: 'Fat' }
 export const EMPTY_TOTALS = Object.freeze({ calories: 0, protein_g: 0, carbs_g: 0, fat_g: 0 })
@@ -257,6 +259,7 @@ export function foodFromEntry(entry) {
     serving: String(entry.serving || '').trim(), grams: base.gramsPer != null ? r1(base.gramsPer) : null,
     calories: Math.round(base.per.calories), protein_g: r1(base.per.protein_g), carbs_g: r1(base.per.carbs_g), fat_g: r1(base.per.fat_g),
     ...(hasMicros(base.micros) ? { micros: base.micros } : {}),
+    ...(entry.meal === SUPPLEMENTS ? { type: 'supplement' } : {}),
     origin: entry.source === 'ai' ? 'ai' : null
   }
 }
@@ -269,7 +272,7 @@ export function savedFoodBody(f, { origin = f.origin, choice = null } = {}) {
   const r = foodBody(f)
   if (!r.ok) return r
   const { ext: _e, ...body } = r.body
-  return { ok: true, body: { ...body, ...(origin ? { origin } : {}), checkDuplicate: true, ...(choice ? { onDuplicate: choice } : {}) } }   // micros ride along inside body when the form had any
+  return { ok: true, body: { ...body, ...(f.type ? { type: f.type } : {}), ...(origin ? { origin } : {}), checkDuplicate: true, ...(choice ? { onDuplicate: choice } : {}) } }   // micros ride along inside body when the form had any
 }
 
 /**

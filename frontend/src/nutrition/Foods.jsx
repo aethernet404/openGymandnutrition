@@ -11,6 +11,7 @@ import './nutrition.css'
 
 export default function Foods() {
   const nav = useNavigate()
+  const [kind, setKind] = useState('food')          // food | supplement: saved supplements are listed apart
   const [scope, setScope] = useState('all')
   const [text, setText] = useState('')
   const [foods, setFoods] = useState(null)
@@ -19,11 +20,11 @@ export default function Foods() {
 
   const load = () => {
     const n = ++seq.current
-    nutri.listFoods(scope, text)
+    nutri.listFoods(scope, text, kind === 'supplement' ? 'supplement' : '')
       .then(r => { if (n === seq.current) { setFoods(r.foods); setError('') } })
       .catch(e => { if (n === seq.current) { setError(e.message); setFoods(f => f || []) } })
   }
-  useEffect(() => { const id = setTimeout(load, text ? 200 : 0); return () => clearTimeout(id) }, [scope, text])
+  useEffect(() => { const id = setTimeout(load, text ? 200 : 0); return () => clearTimeout(id) }, [scope, text, kind])
 
   const star = async f => {
     try { await nutri.updateFood(f.id, { favorite: !f.favorite }); load() } catch (e) { useUI.getState().toast(e.message) }
@@ -32,9 +33,11 @@ export default function Foods() {
   return <div className="narrow nut">
     <div className="hdr">
       <button className="iconbtn" onClick={() => nav('/nutrition')} aria-label={nt('Nutrition')}><Icon name="chevronLeft" /></button>
-      <div style={{ flex: 1, marginInlineStart: 10 }}><h1>{nt('My foods')}</h1><div className="sub">{nt('Foods you made or reuse')}</div></div>
-      <Button size="sm" icon="plus" onClick={() => openFoodSheet({ onSaved: load })}>{nt('New')}</Button>
+      <div style={{ flex: 1, marginInlineStart: 10 }}><h1>{kind === 'supplement' ? nt('My supplements') : nt('My foods')}</h1><div className="sub">{kind === 'supplement' ? nt('Vitamins and supplements you take') : nt('Foods you made or reuse')}</div></div>
+      <Button size="sm" icon="plus" onClick={() => openFoodSheet({ onSaved: load, ...(kind === 'supplement' ? { prefill: { type: 'supplement' } } : {}) })}>{nt('New')}</Button>
     </div>
+    <Segmented value={kind} onChange={setKind} options={[{ value: 'food', label: nt('Foods') }, { value: 'supplement', label: nt('Supplements') }]} />
+    <div style={{ height: 8 }} />
     <Segmented value={scope} onChange={setScope} options={[{ value: 'all', label: nt('All') }, { value: 'favorite', label: nt('Favourites') }, { value: 'recent', label: nt('Recent') }]} />
     <div style={{ height: 10 }} />
     <SearchField value={text} onChange={e => setText(e.target.value)} onClear={() => setText('')} placeholder={nt('Search my foods')} />

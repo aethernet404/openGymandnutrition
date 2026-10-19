@@ -218,8 +218,9 @@ export function nutritionRoutes({
     'GET /api/nutrition/foods': guarded(async (req, res, user) => {
       const q = query(req);
       const scope = q.get('scope') || 'all';
+      const type = q.get('type') === 'supplement' ? 'supplement' : null;
       if (!['all', 'custom', 'favorite', 'recent'].includes(scope)) return fail(res, 400, 'scope must be all, custom, favorite or recent');
-      json(res, 200, { foods: store.listFoods(store.read(user.id), { scope, q: String(q.get('q') || '').slice(0, 80) }) });
+      json(res, 200, { foods: store.listFoods(store.read(user.id), { scope, q: String(q.get('q') || '').slice(0, 80), type }) });
     }),
 
     'POST /api/nutrition/foods': guarded(async (req, res, user) => {
@@ -232,7 +233,7 @@ export function nutritionRoutes({
       const check = body.checkDuplicate === true;
       const choice = body.onDuplicate === 'update' || body.onDuplicate === 'new' ? body.onDuplicate : null;
       const out = await store.mutate(user.id, d => {
-        const existing = check ? store.findSavedFood(d, checked.value.name, checked.value.brand) : null;
+        const existing = check ? store.findSavedFood(d, checked.value.name, checked.value.brand, checked.value.type) : null;
         if (existing && !choice) return { duplicate: existing };
         if (existing && choice === 'update') {
           const { serving, per, origin, micros } = checked.value;
@@ -244,6 +245,31 @@ export function nutritionRoutes({
       });
       if (out.duplicate) return json(res, 409, { error: 'You already have a saved food with that name and brand.', code: 'duplicate', existing: out.duplicate });
       json(res, out.updated ? 200 : 201, { food: out.food, ...(out.updated ? { updated: true } : {}) });
+    }),
+
+    // The usual supplement stack: which saved supplements, how many servings of each. Logging it is one ordinary POST of
+    // entries (meal 'supplements', each by foodId); this only remembers the selection.
+    'GET /api/nutrition/stack': guarded(async (req, res, user) => { json(res, 200, { items: store.stackOf(store.read(user.id)) }); }),
+    'PUT /api/nutrition/stack': guarded(async (req, res, user) => {
+      const body = await readBody(req);
+      const raw = body?.items;
+      if (!Array.isArray(raw) || raw.length > v.LIMITS.stack) return fail(res, 400, `send a list of at most ${v.LIMITS.stack} supplements`);
+      const items = [];
+      const seen = new Set();
+      for (const i of raw) {
+        const qty = typeof i?.qty === 'number' && Number.isFinite(i.qty) ? i.qty : NaN;
+        if (typeof i?.foodId !== 'string' || !(qty >= 0.01 && qty <= v.LIMITS.qty)) return fail(res, 400, 'each item needs a foodId and a number of servings from 0.01 to ' + v.LIMITS.qty);
+        if (seen.has(i.foodId)) return fail(res, 400, 'a supplement can be in the stack once');
+        seen.add(i.foodId);
+        items.push({ foodId: i.foodId.slice(0, 40), qty: v.round(qty, 2) });
+      }
+      const out = await store.mutate(user.id, d => {
+        if (items.some(i => d.foods[i.foodId]?.type !== 'supplement')) return null;
+        d.stack = items;
+        return items;
+      });
+      if (!out) return fail(res, 400, 'the stack can only hold your saved supplements');
+      json(res, 200, { items: out });
     }),
 
     // Edit a food (any of its fields), or just favourite it. Entries already logged keep their numbers.
@@ -261,6 +287,7 @@ export function nutritionRoutes({
         if (f.source === 'fatsecret' && checked.value.favorite) return { refused: 'fatsecret' };
         const patch = f.source === 'custom' ? checked.value : { favorite: checked.value.favorite ?? f.favorite };
         delete patch.source;
+        delete patch.type;                                   // a food does not become a supplement or back
         Object.assign(f, patch);
         if (f.micros == null) delete f.micros;
         return f;

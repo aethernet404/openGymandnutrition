@@ -167,7 +167,7 @@ export function microsSummary(entries) {
 export function dayView(d, date) {
   const entries = d.days[date]?.entries || [];
   const byMeal = {};
-  for (const m of ['breakfast', 'lunch', 'dinner', 'snack']) byMeal[m] = totalsOf(entries.filter(e => e.meal === m));
+  for (const m of ['breakfast', 'lunch', 'dinner', 'snack', 'supplements']) byMeal[m] = totalsOf(entries.filter(e => e.meal === m));
   return { date, entries, totals: totalsOf(entries), byMeal, goals: d.goals, health: healthDay(d, date), activity: activityDay(d, date), eatBack: eatBackOf(d), micros: microsSummary(entries) };
 }
 
@@ -199,6 +199,7 @@ function pruneRecents(d) {
 /** Create a food. Returns the stored food. Throws NutritionLimitError at the cap. */
 export function addFood(d, input) {
   if (Object.keys(d.foods).length >= LIMITS.foods) throw new NutritionLimitError(`you can keep at most ${LIMITS.foods} foods`);
+  if (input.type === 'supplement' && Object.values(d.foods).filter(f => f.type === 'supplement').length >= LIMITS.savedSupplements) throw new NutritionLimitError(`you can keep at most ${LIMITS.savedSupplements} saved supplements`);
   const now = Date.now();
   const f = { id: newId(), source: 'custom', ext: null, favorite: false, useCount: 0, lastUsed: null, createdAt: now, ...input };
   if (f.micros == null) delete f.micros;
@@ -207,9 +208,9 @@ export function addFood(d, input) {
 }
 
 /** The saved (custom) food with this name and brand, ignoring case and extra spaces, or null. */
-export function findSavedFood(d, name, brand = '') {
+export function findSavedFood(d, name, brand = '', type = null) {
   const n = norm(name), b = norm(brand);
-  return Object.values(d.foods).find(f => f.source === 'custom' && norm(f.name) === n && norm(f.brand) === b) || null;
+  return Object.values(d.foods).find(f => f.source === 'custom' && (f.type || null) === (type || null) && norm(f.name) === n && norm(f.brand) === b) || null;
 }
 
 /** Remember a food that came from search or the AI, as a recent. Same food again → same row. */
@@ -226,8 +227,9 @@ export function noteRecent(d, input) {
   return f;
 }
 
-export function listFoods(d, { scope = 'all', q = '' } = {}) {
-  let list = Object.values(d.foods).filter(f => !fsExpired(f));
+export function listFoods(d, { scope = 'all', q = '', type = null } = {}) {
+  // Saved supplements are listed apart from foods: `type: 'supplement'` is only them, anything else only foods.
+  let list = Object.values(d.foods).filter(f => !fsExpired(f) && (type === 'supplement' ? f.type === 'supplement' : f.type !== 'supplement'));
   if (scope === 'custom') list = list.filter(f => f.source === 'custom');
   else if (scope === 'favorite') list = list.filter(f => f.favorite);
   else if (scope === 'recent') list = list.filter(f => f.lastUsed);
@@ -242,6 +244,8 @@ export function listFoods(d, { scope = 'all', q = '' } = {}) {
 export function addEntries(d, date, list) {
   const day = (d.days[date] ||= { entries: [] });
   if (day.entries.length + list.length > LIMITS.entriesPerDay) throw new NutritionLimitError(`a day can hold at most ${LIMITS.entriesPerDay} entries`);
+  const supplements = day.entries.filter(e => e.meal === 'supplements').length + list.filter(e => e.meal === 'supplements').length;
+  if (supplements > LIMITS.supplementsPerDay) throw new NutritionLimitError(`a day can hold at most ${LIMITS.supplementsPerDay} supplements`);
   const now = Date.now();
   const made = list.map(e => ({ id: newId(), ...e, ts: now }));
   day.entries.push(...made);
@@ -314,7 +318,7 @@ export function refundAi(uid) {
 export function searchSaved(d, q, limit = 10) {
   const out = [];
   for (const f of Object.values(d.foods)) {
-    if (f.source !== 'custom') continue;
+    if (f.source !== 'custom' || f.type === 'supplement') continue;       // supplements have their own list
     const r = relevance(q, f.name, f.brand);
     if (!r.full) continue;
     out.push({
@@ -324,4 +328,11 @@ export function searchSaved(d, q, limit = 10) {
     });
   }
   return out.sort((a, b) => b.rank - a.rank).slice(0, limit);
+}
+
+/* ---------- the usual supplement stack: saved supplements and how many servings of each, logged together ---------- */
+
+/** [{ foodId, qty }] of saved supplements that still exist (a deleted one drops out). */
+export function stackOf(d) {
+  return (Array.isArray(d.stack) ? d.stack : []).filter(i => d.foods[i?.foodId]?.type === 'supplement').map(i => ({ foodId: i.foodId, qty: i.qty }));
 }

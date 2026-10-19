@@ -9,7 +9,10 @@
 import { microsOf, hasMicros } from './micros.js';
 
 export const MEALS = ['breakfast', 'lunch', 'dinner', 'snack'];
-export const SOURCES = ['manual', 'quick', 'food', 'ai'];
+// The supplements section of a day is a meal of its own for entries (not a meal you can pick for food).
+export const SUPPLEMENT_MEAL = 'supplements';
+export const ENTRY_MEALS = [...MEALS, SUPPLEMENT_MEAL];
+export const SOURCES = ['manual', 'quick', 'food', 'ai', 'supplement'];
 export const FOOD_SOURCES = ['custom', 'off', 'usda', 'fatsecret', 'ai'];
 // Where a saved (custom) food's numbers came from, beyond "typed by hand": 'ai' = an AI estimate the person confirmed and saved.
 export const FOOD_ORIGINS = ['ai'];
@@ -21,7 +24,8 @@ export const LIMITS = {
   name: 120, brand: 60, serving: 60, ext: 40,
   entriesPerDay: 200, entriesPerRequest: 30,
   foods: 2000, recentFoods: 300,
-  rangeDays: 400
+  rangeDays: 400,
+  supplementsPerDay: 40, savedSupplements: 200, stack: 30
 };
 export const MACROS = ['calories', 'protein_g', 'carbs_g', 'fat_g'];
 
@@ -46,7 +50,7 @@ export function dateParam(s) {
 }
 
 export function mealParam(s) {
-  return MEALS.includes(s) ? good(s) : bad(`meal must be one of ${MEALS.join(', ')}`);
+  return ENTRY_MEALS.includes(s) ? good(s) : bad(`meal must be one of ${ENTRY_MEALS.join(', ')}`);
 }
 
 /** A bounded, non-negative number; `null` allowed when `nullable`. Strings are not coerced. */
@@ -116,6 +120,11 @@ export function food(body, { partial = false } = {}) {
     const m = microsOf(body.micros);
     if (!m.ok) return m;
     out.micros = hasMicros(m.value) ? m.value : null;
+  }
+  // 'supplement' marks a saved supplement (listed apart from foods); anything else is an ordinary food.
+  if (body.type !== undefined) {
+    if (body.type !== null && body.type !== 'supplement') return bad('type must be "supplement" or empty');
+    out.type = body.type;
   }
   if (body.origin !== undefined) {
     if (body.origin !== null && !FOOD_ORIGINS.includes(body.origin)) return bad(`origin must be one of ${FOOD_ORIGINS.join(', ')}`);

@@ -217,3 +217,15 @@
 .nut-mnote{margin:14px 2px 0;overflow-wrap:anywhere}
 .nut-ul-notes{list-style:none;margin:10px 0 0;padding:10px 12px;border-radius:10px;background:var(--surface-2);color:var(--label-2);font-size:13px;line-height:1.4;overflow-wrap:anywhere}
 .nut-ul-notes li+li{margin-top:6px}
+
+/* Vitamins & supplements */
+.nut-stackbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.nut-stackbar>*{min-width:0}
+.nut-chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.nut-chip{padding:6px 10px;border-radius:99px;background:var(--surface-2);color:var(--label);font-size:13px;max-width:100%;overflow-wrap:anywhere;text-align:start}
+.nut-qn{min-width:0}
+.nut-stack-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;padding:8px 2px;border-top:.5px solid var(--surface-3);min-width:0}
+.nut-stack-row:first-child{border-top:0}
+.nut-stack-pick{display:flex;align-items:center;gap:10px;flex:1 1 180px;min-width:0;text-align:start}
+.nut-stack-box{display:inline-flex;align-items:center;justify-content:center;flex:none;width:24px;height:24px;border-radius:7px;border:1.5px solid var(--label-3);color:var(--acc)}
+.nut-stack-pick.on .nut-stack-box{border-color:var(--acc);background:var(--surface-2)}

@@ -15,7 +15,10 @@ export const getRange = (from, to) => api('/api/nutrition/range?' + q({ from, to
 export const addEntries = body => send('POST', '/api/nutrition/entries', body)
 export const updateEntry = (date, id, body) => send('PUT', '/api/nutrition/entries?' + q({ date, id }), body)
 export const deleteEntry = (date, id) => send('DELETE', '/api/nutrition/entries?' + q({ date, id }))
-export const listFoods = (scope = 'all', text = '') => api('/api/nutrition/foods?' + q({ scope, q: text }))
+export const listFoods = (scope = 'all', text = '', type = '') => api('/api/nutrition/foods?' + q({ scope, q: text, type }))
+// The usual supplement stack: [{ foodId, qty }].
+export const getStack = () => api('/api/nutrition/stack')
+export const putStack = items => send('PUT', '/api/nutrition/stack', { items })
 export const createFood = body => send('POST', '/api/nutrition/foods', body)
 export const updateFood = (id, body) => send('PUT', '/api/nutrition/foods?' + q({ id }), body)
 export const deleteFood = id => send('DELETE', '/api/nutrition/foods?' + q({ id }))

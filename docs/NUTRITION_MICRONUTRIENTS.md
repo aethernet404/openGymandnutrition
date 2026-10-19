@@ -123,9 +123,23 @@ search excerpts, the rest are from the fact sheets as I know them (2022-2025 ver
   a percent of the Daily Value only. Also left out: chromium, molybdenum, vitamin D-specific age ranges, and
   children or pregnancy values (this is the general adult figure).
 
-## Supplements
+## Vitamins & supplements
 
-(see "Vitamins & supplements" in the diary; the details are added with that feature)
+* The diary has a **Vitamins & supplements** section directly below Snacks, built like the meal sections, with its own Add
+  button. It is a meal of its own for entries (`meal: "supplements"`), not one you can choose for food.
+* **Logging**: name, optional brand, servings (for example 2 capsules), nutrient amounts **per serving** (the same 29
+  nutrients; a row of quick chips adds the common ones: vitamin D, C, B12, magnesium, zinc, iron, calcium, folate, K, B6, and
+  "More nutrients" has the rest) and optional calories. **Calories default to 0**, so supplements do not change your calorie
+  totals unless you enter calories (gummies); the section only shows calories when there are some.
+* **My supplements**: a saved supplement is an ordinary saved food with `type: "supplement"`. It is listed apart from foods
+  (never in My foods, never in the Add → Search "My food" results), with Recent / Favourites / All, edit and delete (My foods →
+  Supplements, or Edit this supplement). Tap one, set the servings, add: no AI, no lookup. The same name as a food is allowed;
+  two supplements with the same name and brand ask first (update or save as new).
+* **My usual stack**: pick saved supplements and a number of servings for each (up to 30); one button logs them all for the
+  day in one request. A supplement you delete leaves the stack.
+* **Micronutrients card**: supplement amounts are added in when *Food + supplements* is on (the default); *Food only* leaves
+  them out. The upper-limit note always uses everything taken.
+* **Limits**: 40 supplement entries a day, 200 saved supplements, 30 in the stack; the usual 200 entries a day and 2,000 foods.
 
 ## NIH Dietary Supplement Label Database (DSLD): research only, not built
 
