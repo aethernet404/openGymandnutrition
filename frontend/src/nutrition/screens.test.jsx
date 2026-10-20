@@ -22,7 +22,7 @@ const m = vi.hoisted(() => ({
   api: {
     getDay: vi.fn(), getConfig: vi.fn(), addEntries: vi.fn(), updateEntry: vi.fn(), deleteEntry: vi.fn(),
     listFoods: vi.fn(), createFood: vi.fn(), updateFood: vi.fn(), deleteFood: vi.fn(), getGoals: vi.fn(), putGoals: vi.fn(),
-    getAdmin: vi.fn(), putAdmin: vi.fn(), getRange: vi.fn(), searchFoods: vi.fn(), lookupBarcode: vi.fn(), testUsda: vi.fn(), testFatsecret: vi.fn(), getStack: vi.fn(), putStack: vi.fn(), analyze: vi.fn(), setCoachShare: vi.fn(), createHealthToken: vi.fn(), revokeHealthToken: vi.fn(), putHealthSettings: vi.fn(), getHealthToken: vi.fn(), getWeight: vi.fn(), getHealthHistory: vi.fn(), getHealthDebug: vi.fn(), clearHealthDebug: vi.fn()
+    getAdmin: vi.fn(), putAdmin: vi.fn(), getRange: vi.fn(), searchFoods: vi.fn(), lookupBarcode: vi.fn(), testUsda: vi.fn(), testFatsecret: vi.fn(), getFatsecretFood: vi.fn(), getStack: vi.fn(), putStack: vi.fn(), analyze: vi.fn(), setCoachShare: vi.fn(), createHealthToken: vi.fn(), revokeHealthToken: vi.fn(), putHealthSettings: vi.fn(), getHealthToken: vi.fn(), getWeight: vi.fn(), getHealthHistory: vi.fn(), getHealthDebug: vi.fn(), clearHealthDebug: vi.fn()
   }
 }))
 
@@ -1692,29 +1692,38 @@ describe('FatSecret in the app', () => {
     expect(m.api.addEntries).toHaveBeenCalledWith({ date: '2026-10-12', meal: 'snack', source: 'food', qty: 1, food: { name: 'Taquitos, Beef & Cheese', brand: '7-Eleven', source: 'fatsecret', ext: '3001', serving: '1 taquito (76 g)', grams: 76, per: { calories: 190, protein_g: 7, carbs_g: 20, fat_g: 9 } } })
   })
 
-  it('barcode: a FatSecret answer is a normal result with the credit; "not found" says both places were tried; its failure is named beside it', async () => {
+  it('a search row is only a summary: tapping it fetches the real servings (food.get), shows a wait, and the credit stays', async () => {
+    const ROW = { ...FS_HIT, partial: true, bases: [{ label: '1 taquito', grams: null, per: { calories: 190, protein_g: 7, carbs_g: 20, fat_g: 9 } }] }
+    mockSearch({ fatsecret: [ROW] })
+    m.api.getFatsecretFood.mockResolvedValue({ food: { name: ROW.name, brand: ROW.brand, bases: [{ label: '1 taquito (76 g)', grams: 76, per: { calories: 190, protein_g: 7, carbs_g: 20, fat_g: 9 } }, { label: '100 g', grams: 100, per: { calories: 250, protein_g: 9, carbs_g: 26, fat_g: 12 } }] } })
+    const s = await openSearch()
+    await typeSearch(s, 'taquitos')
+    await click(s.el.querySelector('.nut-pick'))
+    expect(m.api.getFatsecretFood).toHaveBeenCalledWith('3001')
+    expect(s.el.textContent).toContain('1 taquito (76 g)')
+    expect(credit(s.el)).toBeTruthy()
+  })
+
+  it('if the servings cannot be fetched the row’s own serving still works, and the person is told', async () => {
+    const ROW = { ...FS_HIT, partial: true, bases: [{ label: '1 taquito', grams: null, per: { calories: 190, protein_g: 7, carbs_g: 20, fat_g: 9 } }] }
+    mockSearch({ fatsecret: [ROW] })
+    m.api.getFatsecretFood.mockRejectedValue(new Error('FatSecret did not answer in time.'))
+    const s = await openSearch()
+    await typeSearch(s, 'taquitos')
+    await click(s.el.querySelector('.nut-pick'))
+    expect(s.el.textContent).toContain('1 taquito')
+    expect(byText('button', 'Add to snacks')).toBeTruthy()
+  })
+
+  it('barcode: FatSecret is not part of it any more; "not found" names Open Food Facts only', async () => {
     mockSearch({})
     const s = await openSearch()
-    const scan = async answer => {
-      m.api.lookupBarcode.mockResolvedValue({ code: '0044000032029', ...answer })
-      if (!s.el.querySelector('input[aria-label="Barcode number"]')) await click(s.el.querySelector('[aria-label="Scan a barcode"]'))
-      await setValue(s.el.querySelector('input[aria-label="Barcode number"]'), '0044000032029')
-      await click(byText('button', 'Look up'))
-    }
-    await scan({ found: true, product: FS_HIT })
-    expect(s.el.textContent).toContain('Taquitos, Beef & Cheese')
-    expect(credit(s.el)).toBeTruthy()
-    await scan({ found: false, reason: 'unknown', fatsecret: { ok: true, found: false } })
-    expect(s.el.textContent).toContain('is not in Open Food Facts or FatSecret.')
-    expect(byText('button', 'Add it as my food')).toBeTruthy()
-    expect(credit(s.el)).toBeNull()
-    await scan({ found: false, reason: 'unknown', fatsecret: { ok: false, kind: 'timeout', error: 'FatSecret did not answer in time.' } })
-    expect(s.el.textContent).toContain('FatSecret did not answer in time.')
+    m.api.lookupBarcode.mockResolvedValue({ code: '0044000032029', found: false, reason: 'unknown' })
+    await click(s.el.querySelector('[aria-label="Scan a barcode"]'))
+    await setValue(s.el.querySelector('input[aria-label="Barcode number"]'), '0044000032029')
+    await click(byText('button', 'Look up'))
     expect(s.el.textContent).toContain('is not in Open Food Facts.')
-    expect(byText('button', 'Add it as my food')).toBeTruthy()
-    await scan({ found: false, reason: 'unknown', fatsecret: { ok: false, kind: 'ip', error: 'FatSecret refused this server’s IP address.' } })
-    expect(s.el.textContent).toContain('refused this server’s IP address')
-    expect(s.el.querySelectorAll('.nut-banner.warn button.linkbtn')).toHaveLength(0)       // no Retry for a refused IP
+    expect(s.el.textContent).not.toContain('FatSecret')
   })
 
   it('admin: FatSecret keys card: instructions with the dashboard link and the IP note, Save sends both fields once, the secret is not shown again, Test and Remove work', async () => {
@@ -1741,12 +1750,15 @@ describe('FatSecret in the app', () => {
     expect(sec().textContent).toContain('Keys set (ID …0718)')
     expect(sec().textContent).not.toContain('SECRETSECRET')
     expect(sec().querySelector('input[aria-label="FatSecret Client Secret"]').value).toBe('')
-    m.api.testFatsecret.mockResolvedValue({ ok: true, ms: 120, count: 2, barcode: 'not-in-plan' })
+    m.api.testFatsecret.mockResolvedValue({ ok: true, ms: 120, token: { ok: true, scopes: ['basic'] }, search: { ok: true, count: 1 } })
     await click(byText('button', 'Test keys'))
-    expect(sec().textContent).toContain('Works (120 ms). Barcode lookup: not in this edition.')
-    m.api.testFatsecret.mockResolvedValue({ ok: false, kind: 'ip', error: 'FatSecret refused this server’s IP address. In your FatSecret developer dashboard, add the server’s public IP address under IP Restrictions.' })
+    expect(sec().textContent).toContain('Token: OK. Scopes granted: basic.')
+    expect(sec().textContent).toContain('Search (foods.search v1): OK, 1 result(s)')
+    m.api.testFatsecret.mockResolvedValue({ ok: false, ms: 90, token: { ok: true, scopes: ['basic'] }, search: { ok: false, kind: 'plan', code: 14, message: 'Missing scope: premier', meaning: 'Missing scope: your FatSecret key does not include this feature; the free Basic edition has no access to it.' } })
     await click(byText('button', 'Test keys'))
-    expect(sec().textContent).toContain('refused this server’s IP address')
+    expect(sec().textContent).toContain('FatSecret code 14: Missing scope: premier')
+    expect(sec().textContent).toContain('the free Basic edition has no access to it')
+    expect(sec().textContent).toContain('Premier Free')
     m.api.putAdmin.mockResolvedValue({ enabled: true, aiDailyCap: 30, aiCapMax: 500, aiCapDefault: 30, usdaKeySet: false, fatsecretSet: false, fatsecretIdHint: null })
     await click(byText('button', 'Remove keys'))
     expect(m.api.putAdmin).toHaveBeenLastCalledWith({ fatsecret: null })

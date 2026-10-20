@@ -363,6 +363,7 @@ function SearchTab({ date, meal, ai, onSaved, onDescribe, onQuick, close }) {
   const [scanOpen, setScanOpen] = useState(false)
   const [methods, setMethods] = useState({ photo: true, type: true, live: null, liveWhy: null })
   const [bc, setBc] = useState(null)             // { status, result, code, warn }
+  const [opening, setOpening] = useState(null)   // the FatSecret food whose servings are being fetched
   const seq = useRef(0)
   const asked = useRef('')
 
@@ -406,6 +407,21 @@ function SearchTab({ date, meal, ai, onSaved, onDescribe, onQuick, close }) {
   }
   const onCode = useCallback(c => lookup(c), [])
 
+  // A FatSecret search row carries only its one-line summary; the real servings are fetched when it is tapped.
+  // If that fails the row's own serving is still usable, and the person is told why the others are missing.
+  const choose = async hit => {
+    if (!hit.partial) { setPicked(hit); return }
+    setOpening(hit.ext)
+    try {
+      const { food } = await nutri.getFatsecretFood(hit.ext)
+      setPicked({ ...hit, ...food, partial: false })
+    } catch (e) {
+      toast(nt('Could not load the servings: {0} Showing the summary serving only.', e.message || ''))
+      setPicked({ ...hit, partial: false })
+    }
+    setOpening(null)
+  }
+
   const add = async (qty, base) => {
     setBusy(true)
     try {
@@ -428,18 +444,17 @@ function SearchTab({ date, meal, ai, onSaved, onDescribe, onQuick, close }) {
     {bc?.status === 'loading' && <div className="muted small nut-empty">{nt('Looking up the barcode…')}</div>}
     {bc?.status === 'error' && <div className="nut-banner warn"><Icon name="warning" /><span>{bc.error}</span><button className="linkbtn" onClick={() => lookup(bc.code)}>{nt('Try again')}</button></div>}
     {r?.found && <div className="nut-pick-list"><HitRow hit={r.product} onPick={setPicked} /></div>}
-    {r?.found && r.product.source === 'fatsecret' && <div className="nut-credit-row"><FatSecretCredit /></div>}
-    {r && !r.found && r.fatsecret?.error && <div className="nut-banner warn" role="alert"><Icon name="warning" /><span>{nt(r.fatsecret.error)}</span>{!NO_RETRY.has(r.fatsecret.kind) && <button className="linkbtn" onClick={() => lookup(bc.code)}>{nt('Retry')}</button>}</div>}
     {r && !r.found && <div className="nut-banner info">
       <Icon name="info" />
-      <span>{r.reason === 'error' ? nt(r.error) : r.reason === 'no-nutrition' ? nt('“{0}” is in Open Food Facts but has no nutrition data.', r.name) : (r.fatsecret?.ok ? nt('Barcode {0} is not in Open Food Facts or FatSecret.', bc.code) : nt('Barcode {0} is not in Open Food Facts.', bc.code))}{bc.warn && r.reason !== 'error' ? ' ' + nt('Its check digit does not add up, so look for a typo.') : ''}</span>
+      <span>{r.reason === 'error' ? nt(r.error) : r.reason === 'no-nutrition' ? nt('“{0}” is in Open Food Facts but has no nutrition data.', r.name) : nt('Barcode {0} is not in Open Food Facts.', bc.code)}{bc.warn && r.reason !== 'error' ? ' ' + nt('Its check digit does not add up, so look for a typo.') : ''}</span>
       {r.reason === 'error'
         ? <button className="linkbtn" onClick={() => lookup(bc.code)}>{nt('Try again')}</button>
         : <button className="linkbtn" onClick={() => openFoodSheet({ prefill: { name: r.name || '', ext: bc.code }, onSaved: () => { onSaved(); close() } })}>{nt('Add it as my food')}</button>}
     </div>}
 
+    {opening && <div className="nut-searching" role="status"><div className="nut-spinner sm" aria-hidden="true" /><span>{nt('Loading the servings…')}</span></div>}
     {per && <SearchResults per={per} q={asked.current || text.trim()} slow={slow} isAdmin={isAdmin} ai={ai}
-      onPick={setPicked} onRetry={id => search(asked.current, [id])} onDescribe={() => onDescribe(text.trim())} onQuick={() => onQuick(text.trim())} />}
+      onPick={choose} onRetry={id => search(asked.current, [id])} onDescribe={() => onDescribe(text.trim())} onQuick={() => onQuick(text.trim())} />}
     {!per && !bc && !scanOpen && <div className="muted small nut-empty">{nt('Search Open Food Facts, USDA and FatSecret, or scan a barcode.')}</div>}
   </>
 }

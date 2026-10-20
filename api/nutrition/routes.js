@@ -320,11 +320,22 @@ export function nutritionRoutes({
       json(res, 200, { q, results: [...mine, ...out.results], sources: { mine: { ok: true, count: mine.length }, ...out.sources } });
     }),
 
+    // The full servings of a FatSecret search result (food.get v5), asked when it is tapped. Same limits as a search.
+    'GET /api/nutrition/fatsecret/food': guarded(async (req, res, user) => {
+      const id = String(query(req).get('id') || '');
+      if (!/^\d{1,15}$/.test(id)) return fail(res, 400, 'a FatSecret food id is digits');
+      const creds = cfg.fatsecretCreds();
+      if (!creds) return fail(res, 400, 'FatSecret search is off');
+      if (throttled(res, user)) return;
+      try { json(res, 200, { food: await fatsecret.food(id, creds, { uid: user.id }) }); }
+      catch (e) { json(res, 502, { error: e?.text || 'FatSecret did not answer.', kind: e?.kind || 'down' }); }
+    }),
+
     'GET /api/nutrition/barcode': guarded(async (req, res, user) => {
       const code = cleanBarcode(query(req).get('code'));
       if (!code) return fail(res, 400, 'a barcode is 8 to 14 digits');
       if (throttled(res, user)) return;
-      json(res, 200, { code, ...(await lookup.barcode(code, { fatsecret: cfg.fatsecretCreds(), uid: user.id })) });
+      json(res, 200, { code, ...(await lookup.barcode(code)) });
     }),
 
     /* ----- Apple Health, via a Shortcut ----- */
@@ -479,7 +490,7 @@ export function nutritionRoutes({
 
     'GET /api/admin/nutrition': async (req, res) => {
       if (!requireAdmin(req, res)) return;
-      json(res, 200, { ...cfg.load(), usdaKeyHint: cfg.usdaKeyHint(), fatsecretIdHint: cfg.fatsecretIdHint(), fatsecretUsage: fatsecret.usage?.snapshot?.() ?? null, aiCapMax: cfg.AI_CAP_MAX, aiCapDefault: cfg.AI_CAP_DEFAULT });
+      json(res, 200, { ...cfg.load(), usdaKeyHint: cfg.usdaKeyHint(), fatsecretIdHint: cfg.fatsecretIdHint(), fatsecretUsage: fatsecret.usage?.snapshot?.() ?? null, fatsecretLast: fatsecret.status?.().lastError ?? null, aiCapMax: cfg.AI_CAP_MAX, aiCapDefault: cfg.AI_CAP_DEFAULT });
     },
 
     'PUT /api/admin/nutrition': async (req, res) => {
@@ -489,22 +500,18 @@ export function nutritionRoutes({
       if (!r.ok) return fail(res, 400, r.error);
       if (body && typeof body === 'object' && body.fatsecret !== undefined) fatsecret.forget();     // a new pair starts with no cached token or results
       if (!r.config.healthDebug) haeDebug.clear();
-      json(res, 200, { ...r.config, usdaKeyHint: cfg.usdaKeyHint(), fatsecretIdHint: cfg.fatsecretIdHint(), fatsecretUsage: fatsecret.usage?.snapshot?.() ?? null, aiCapMax: cfg.AI_CAP_MAX, aiCapDefault: cfg.AI_CAP_DEFAULT });
+      json(res, 200, { ...r.config, usdaKeyHint: cfg.usdaKeyHint(), fatsecretIdHint: cfg.fatsecretIdHint(), fatsecretUsage: fatsecret.usage?.snapshot?.() ?? null, fatsecretLast: fatsecret.status?.().lastError ?? null, aiCapMax: cfg.AI_CAP_MAX, aiCapDefault: cfg.AI_CAP_DEFAULT });
     },
 
-    // Checks the stored FatSecret keys: a token, a real search, and whether this edition grants barcode lookups.
-    // The answer is a verdict in words; neither the keys nor the token are ever in it.
+    // Checks the stored FatSecret keys: a token (and the scopes it grants), then one tiny search. Not counted against the daily
+    // budget. The answer is a verdict with FatSecret's code and message (sanitised); neither the keys nor the token are in it.
     'POST /api/admin/nutrition/test-fatsecret': async (req, res) => {
-      const admin = requireAdmin(req, res); if (!admin) return;
+      if (!requireAdmin(req, res)) return;
       const creds = cfg.fatsecretCreds();
       if (!creds) return fail(res, 400, 'no FatSecret keys are set');
       const t0 = Date.now();
-      try {
-        const r = await fatsecret.test(creds, { uid: admin.id });
-        json(res, 200, { ok: true, count: r.count, barcode: r.barcode, ms: Date.now() - t0 });
-      } catch (e) {
-        json(res, 200, { ok: false, kind: e?.kind || 'down', error: e?.text || 'FatSecret did not answer.', ms: Date.now() - t0 });
-      }
+      const r = await fatsecret.test(creds);
+      json(res, 200, { ok: !!(r.token.ok && r.search?.ok), token: r.token, search: r.search, ms: Date.now() - t0 });
     },
 
     // Checks the stored USDA key with a real search, so the admin knows before anyone else finds out.

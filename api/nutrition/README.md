@@ -58,7 +58,7 @@ destination: the Claude runtime talks to Anthropic exactly as the Coach does.
 `lookup.js` (OFF/USDA), `analyze.js` + `vision.js` + `pipeline.js` + `meal.js` + `prompt.js` (AI estimate),
 `health.js` (Apple Health token + ingest), `jobdir.js`, `coach-summary.js` (the Coach's read-only view), `spike/` (Phase 1 live check).
 
-`fatsecret.js` — the FatSecret Platform API source (OAuth token cache, search, barcode, per-profile and server-wide daily budget); `POST /api/admin/nutrition/test-fatsecret` checks the keys. See `docs/NUTRITION_FATSECRET.md`.
+`fatsecret.js` — the FatSecret Platform API source on the free Basic edition (OAuth token cache, foods.search v1, food.get v5, per-profile and server-wide daily budget; no barcode, that is Premier Exclusive); `GET /api/nutrition/fatsecret/food?id=` fetches a tapped result's servings; `POST /api/admin/nutrition/test-fatsecret` shows token, granted scopes and a tiny search. See `docs/NUTRITION_FATSECRET.md`.
 
 **Saved foods (My foods).** A food saved from an AI estimate or from a diary entry is an ordinary custom food with `origin: 'ai'` when it came from an AI estimate (a badge in the app; fully editable). `POST /api/nutrition/foods` with `checkDuplicate: true` answers 409 `{code:'duplicate', existing}` for the same name and brand (any case); `onDuplicate: 'update'` updates that food's serving and numbers, `'new'` saves another. `GET /api/nutrition/search` (`source=all` or `mine`) puts the profile's own saved foods first (`source:'mine'`, rank above every outside source, every typed word must match); `source=mine` is local and not counted as an outside lookup. Logging one is a plain food entry by `foodId`: no AI call and no AI allowance. The photo is never part of any of it.
 

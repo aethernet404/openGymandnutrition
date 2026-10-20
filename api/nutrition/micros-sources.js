@@ -84,12 +84,22 @@ export function microsFromUsda(list) {
 /* ------------------------------ FatSecret ------------------------------ */
 
 /**
- * A FatSecret serving → micros for that serving. Only the fields it gives in plain grams or milligrams are read: fiber,
- * sugar, saturated fat (g), sodium, cholesterol, potassium (mg). Its vitamin A, vitamin C, calcium and iron come as a
- * PERCENT of a Daily Value on an older basis, so they are deliberately NOT converted (that would be a guess).
+ * A FatSecret food.get v5 serving → micros for that serving. The docs list the amounts directly: fiber, sugar,
+ * saturated_fat (g), sodium, cholesterol, potassium, calcium, iron, vitamin_c (mg), vitamin_a, vitamin_d (mcg).
+ * "Where available", and a Brand food's example shows 0 for every vitamin, so for a BRAND food a 0 for vitamin A, C, D,
+ * calcium or iron is read as "not provided" (unknown), not as a real 0: FatSecret does not distinguish them. A Generic food's
+ * zeros are kept, and so are zeros for the fields a label always states (fibre, sugar, sodium, saturated fat, cholesterol).
+ * Evidence for this reading: none beyond the docs' own Brand example; it is the cautious choice, and it errs towards
+ * "no data" rather than a false 0.
  */
-export function microsFromFatSecret(s) {
+const FS_ONLY_IF_POSITIVE_FOR_BRAND = new Set(['vit_a_mcg', 'vit_c_mg', 'vit_d_mcg', 'calcium_mg', 'iron_mg']);
+export function microsFromFatSecret(s, { brand = false } = {}) {
   if (!s || typeof s !== 'object') return {};
   const g = k => { const v = num(s[k]); return v != null && v >= 0 ? v : undefined; };
-  return microsFrom({ fiber_g: g('fiber'), sugar_g: g('sugar'), satfat_g: g('saturated_fat'), sodium_mg: g('sodium'), cholesterol_mg: g('cholesterol'), potassium_mg: g('potassium') });
+  const raw = {
+    fiber_g: g('fiber'), sugar_g: g('sugar'), satfat_g: g('saturated_fat'), sodium_mg: g('sodium'), cholesterol_mg: g('cholesterol'), potassium_mg: g('potassium'),
+    vit_a_mcg: g('vitamin_a'), vit_c_mg: g('vitamin_c'), vit_d_mcg: g('vitamin_d'), calcium_mg: g('calcium'), iron_mg: g('iron')
+  };
+  if (brand) for (const k of FS_ONLY_IF_POSITIVE_FOR_BRAND) if (raw[k] === 0) delete raw[k];
+  return microsFrom(raw);
 }

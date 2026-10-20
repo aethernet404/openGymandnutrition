@@ -117,11 +117,11 @@ function FatSecretKeys() {
   }
   const test = async () => {
     setBusy(true); setResult(null)
-    try { setResult(await nutri.testFatsecret()) } catch (e) { setResult({ ok: false, error: e.message }) }
+    try { setResult(await nutri.testFatsecret()) } catch (e) { setResult({ ok: false, failed: e.message }) }
     setBusy(false)
   }
   const u = cfg.fatsecretUsage
-  return <Section title={nt('FatSecret food search')} footer={nt('Adds restaurant, chain and convenience-store foods (for example “7-Eleven taquitos”) to the search. The free Basic edition allows 5,000 calls a day; this server stops at {0} a day and {1} per person so it cannot run out by accident.', u?.cap ?? 4000, u?.userCap ?? 400)}>
+  return <Section title={nt('FatSecret food search')} footer={nt('Adds restaurant, chain and convenience-store foods (for example “7-Eleven taquitos”) to the search. The free Basic edition has search (foods.search v1: name, brand and one line of calories and macros) and food details (food.get v5: all servings and nutrients, fetched when you tap a result). Barcode lookup is not part of Basic, so barcodes still use Open Food Facts. It allows 5,000 calls a day; this server stops at {0} a day and {1} per person so it cannot run out by accident.', u?.cap ?? 4000, u?.userCap ?? 400)}>
     <div className="lrow nut-usda">
       <span className="lrow-m">
         <span className="lrow-t">{cfg.fatsecretSet ? nt('Keys set (ID {0})', cfg.fatsecretIdHint || '…') : nt('No keys set')}</span>
@@ -138,12 +138,18 @@ function FatSecretKeys() {
     {cfg.fatsecretSet && <div className="lrow nut-usda-row">
       <Button size="sm" onClick={test} disabled={busy}>{nt('Test keys')}</Button>
       <Button size="sm" variant="ghost" style={{ color: 'var(--red)' }} onClick={() => save(null)} disabled={busy}>{nt('Remove keys')}</Button>
-      {result && <span className="small" style={{ color: result.ok ? 'var(--green)' : 'var(--red)' }}>{result.ok
-        ? nt('Works ({0} ms). Barcode lookup: {1}.', result.ms, result.barcode === 'available' ? nt('included') : result.barcode === 'not-in-plan' ? nt('not in this edition') : nt('unknown'))
-        : nt(result.error || 'Did not work')}</span>}
     </div>}
+    {result && <div className="lrow nut-usda-row"><div className="small" role="status" style={{ color: result.ok ? 'var(--green)' : 'var(--red)' }}>
+      {result.failed ? <div>{result.failed}</div> : <>
+        <div>{result.token?.ok ? nt('Token: OK. Scopes granted: {0}.', (result.token.scopes || []).join(', ') || nt('not reported')) : nt('Token: failed. {0}', result.token?.text || '')}</div>
+        {result.search && (result.search.ok
+          ? <div>{nt('Search (foods.search v1): OK, {0} result(s) for “apple” ({1} ms).', result.search.count, result.ms)}</div>
+          : <div>{nt('Search (foods.search v1): failed.')}{result.search.code != null ? ' ' + nt('FatSecret code {0}: {1}', result.search.code, result.search.message || '') : ''} {result.search.meaning || result.search.text || ''}</div>)}
+      </>}
+    </div></div>}
+    {cfg.fatsecretSet && cfg.fatsecretLast && <div className="lrow nut-usda-row"><span className="small muted">{nt('Last FatSecret problem: {0}', cfg.fatsecretLast.code != null ? `code ${cfg.fatsecretLast.code}${cfg.fatsecretLast.message ? ' — ' + cfg.fatsecretLast.message : ''}` : cfg.fatsecretLast.text || cfg.fatsecretLast.kind)}</span></div>}
     <div className="lrow nut-usda-help"><span className="small muted">
-      {nt('Get free keys: sign up at')} <a href="https://platform.fatsecret.com/" target="_blank" rel="noopener noreferrer">platform.fatsecret.com</a>{nt(', choose the free Basic edition, then copy the Client ID and Client Secret (the “REST API OAuth 2.0” pair) from your dashboard. FatSecret only answers requests from IP addresses you register there: add the public IP address of this server under IP Restrictions. Attribution (“Powered by fatsecret”) is shown wherever their results appear.')}
+      {nt('Get free keys: sign up at')} <a href="https://platform.fatsecret.com/" target="_blank" rel="noopener noreferrer">platform.fatsecret.com</a>{nt(', choose the free Basic edition, then copy the Client ID and Client Secret (the “REST API OAuth 2.0” pair) from your dashboard. FatSecret only answers requests from IP addresses you register there: add the public IP address of this server under IP Restrictions. Attribution (“Powered by fatsecret”) is shown wherever their results appear. Later, FatSecret’s free “Premier Free” tier (for start-ups, non-profits and students; it needs verification and attribution) can unlock more; the app does not need it.')}
     </span></div>
   </Section>
 }

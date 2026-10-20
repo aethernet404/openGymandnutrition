@@ -339,22 +339,9 @@ export function createLookup({
     return { results: results.slice(0, MAX_RESULTS * 2), sources: status };
   }
 
-  /** @returns {{ found: boolean, product?: object, error?: string, kind?: string }} */
-  async function barcode(code, { fatsecret: fsCreds = null, uid = null } = {}) {
-    const key = 'bc|' + code + (fsCreds ? '|fs' : '');
-    const hit = recall(key); if (hit) return hit;
-    // Open Food Facts first; FatSecret only for a code it does not know (or knows without nutrition).
-    const off = await barcodeOff(code);
-    if (off.found || off.reason === 'error' || !fsCreds || !fs) return off.found || off.reason === 'error' ? off : remember(key, off, 5 * 60000);
-    try {
-      const r = await fs.barcode(code, fsCreds, { uid });
-      if (r.found) return remember(key, { found: true, product: r.product }, 60 * 60000);
-      return remember(key, { ...off, fatsecret: r.unavailable ? { skipped: r.unavailable } : { ok: true, found: false } }, 5 * 60000);
-    } catch (e) {
-      const text = e instanceof LookupError ? describe('FatSecret', e) : describe('FatSecret', new LookupError('down'));
-      return { ...off, fatsecret: { ok: false, kind: e?.kind || 'down', error: text } };    // not cached: the next scan asks again
-    }
-  }
+  /** @returns {{ found: boolean, product?: object, error?: string, kind?: string }}
+   *  Open Food Facts only: FatSecret's barcode lookup is a Premier feature, not part of the free Basic edition. */
+  async function barcode(code) { return barcodeOff(code); }
 
   async function barcodeOff(code) {
     const key = 'bc|' + code;

@@ -70,7 +70,7 @@ potassium 4,700 mg, sodium 2,300 mg). Total sugars have no Daily Value.
 | vitamin E IU | mg alpha-tocopherol | × 0.67 (natural d-alpha) | synthetic dl-alpha would be × 0.45; natural assumed |
 | salt (g) | sodium (mg) | × 400 (sodium is 39.3 % of salt) | used only when a product lists no sodium |
 | USDA unit `G` / `MG` / `UG` | our unit | by the unit USDA states on the row | none |
-| FatSecret % Daily Value | — | **not converted** | its vitamin A, C, calcium and iron are percentages on an older basis; converting would be a guess |
+| FatSecret vitamin A, C, D, calcium, iron | mcg / mg | **amounts**, as documented | on a **Brand** food a 0 for these five means "not stated" and is treated as unknown (not as zero); on a Generic food a 0 is trusted |
 
 Vitamin A is kept as mcg RAE, vitamin E as mg alpha-tocopherol, niacin as mg (NE), folate as mcg DFE.
 
@@ -80,7 +80,7 @@ Vitamin A is kept as mcg RAE, vitamin E as mg alpha-tocopherol, niacin as mg (NE
 |---|---|---|
 | **USDA FoodData Central** | by nutrient id (1079 fibre, 2000/1063 sugars, 1093 sodium, 1258 sat. fat, 1253 cholesterol, 1092 potassium, 1087 calcium, 1089 iron, 1090 magnesium, 1095 zinc, 1091 phosphorus, 1103 selenium, 1098 copper, 1101 manganese, 1100 iodine, 1106/1104 vitamin A RAE/IU, 1162 C, 1114/1110 D mcg/IU, 1109 E, 1185 K, 1165 B1, 1166 B2, 1167 B3, 1170 B5, 1175 B6, 1176 biotin, 1190/1177 folate DFE/total, 1178 B12, 1180 choline); per 100 g, converted from the unit USDA states | Foundation and SR Legacy foods carry nearly all of them. **Branded** foods carry only what is on their label (typically sodium, sugars, fibre, saturated fat, cholesterol, potassium, calcium, iron, vitamin D, sometimes A and C). The nutrient ids are from FoodData Central's standard numbering; I could not open the documentation to re-check them. |
 | **Open Food Facts** | `nutriments` per 100 g for fibre, sugars, sodium (or salt), saturated fat, cholesterol, the minerals above and most vitamins | Entirely product-dependent: many products list only the label's mandatory nutrients, so vitamins and minerals are often absent. Values are volunteer-entered; vitamin A/D/E unit handling is assumed (see above). |
-| **FatSecret** (Basic) | per serving: fibre, sugar, saturated fat, sodium, cholesterol, potassium | **No vitamins or minerals** in a usable unit (vitamin A, C, calcium and iron are percentages and are skipped). |
+| **FatSecret** (Basic, from food.get v5 when a result is tapped) | per serving: fibre, sugar, saturated fat, sodium, cholesterol, potassium, vitamin A (mcg), C (mg), D (mcg), calcium (mg), iron (mg) | Brand foods: a 0 for the last five is unknown, not zero. The search list itself shows only calories and macros. |
 | **Foods you create / label values you type** | anything | — |
 | **Quick add, AI estimates** | nothing | by design |
 

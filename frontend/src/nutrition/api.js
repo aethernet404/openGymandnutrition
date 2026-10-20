@@ -31,6 +31,8 @@ export const putAdmin = body => send('PUT', '/api/admin/nutrition', body)
 // gives a source about 21 s (10 s, one retry at 8 s); the client waits a little longer than that.
 export const searchFoods = (text, source = 'all') => api('/api/nutrition/search?' + q({ q: text, source }), { timeout: 30000 })
 export const lookupBarcode = code => api('/api/nutrition/barcode?' + q({ code }), { timeout: 20000 })
+// The full servings of a FatSecret food, asked only when a search row is tapped (food.get v5).
+export const getFatsecretFood = id => api('/api/nutrition/fatsecret/food?' + q({ id }), { timeout: 30000 })
 export const testUsda = () => send('POST', '/api/admin/nutrition/test-usda', {})
 export const testFatsecret = () => send('POST', '/api/admin/nutrition/test-fatsecret', {})
 

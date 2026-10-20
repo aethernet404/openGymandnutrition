@@ -14,50 +14,74 @@ chain and convenience-store foods, for example "7-Eleven taquitos".
    (`curl ifconfig.me` from the server). If your ISP changes it, update it there. Until it is registered every
    call fails with "FatSecret refused this server's IP address".
 4. openGym → Nutrition → Goals → **FatSecret food search**: paste both, **Save**, then **Test keys**. The test
-   says whether the keys work and whether this edition includes barcode lookup.
+   shows the token, the scopes it grants and a tiny search. Barcode lookup is not part of Basic.
 
 The secret is stored encrypted (the same way as the USDA key and the Coach's credentials), is never returned to
 any screen after saving (only the last four characters of the Client ID are shown), and is never written to a log.
 **Remove keys** turns the source off.
 
-## What was verified in FatSecret's documentation, and what was not
+## What the free Basic key can do (and what it cannot)
 
-FatSecret's documentation site (platform.fatsecret.com) could not be opened from where this was built, so what is
-below comes from search-engine excerpts of their pages, their blog, and third-party client libraries. Anything
-marked *unverified* is a best reading and is written defensively; the admin Test button and the first real search
-settle most of it.
+The admin card and this page follow FatSecret's own pages (platform.fatsecret.com/docs: the method pages and
+the error-codes guide). The first version of this feature called `foods.search v4`, which carries FatSecret's
+**Premier Exclusive** badge (scope `premier`). A Basic key gets **error code 14, "OAuth 2.0: Missing scope"**
+for it, inside an HTTP 200 answer; the app then called that a rate limit, which was wrong. Both are fixed.
 
-| | Status |
+| | What openGym uses |
 |---|---|
-| **Authentication**: OAuth 2.0 client credentials; `POST https://oauth.fatsecret.com/connect/token`, Client ID and Secret as HTTP Basic credentials, body `grant_type=client_credentials&scope=basic`; the answer has `access_token` and `expires_in` (a day in their example); calls carry `Authorization: Bearer …`. Scopes include `basic`, `premier`, `barcode`, `localization`, `nlp`, `image-recognition`, `feedback`. | seen in their OAuth 2.0 guide |
-| **Search**: `GET https://platform.fatsecret.com/rest/foods/search/v4` with `search_expression`, `max_results` (at most 50), `page_number` (zero-based), `format=json`. v4 returns each food with its servings, including standardised 100 g ones (`serving_id` 0) for brand foods. | path, parameters and the servings change seen in their docs and blog |
-| **Food detail**: `GET …/rest/food/v5?food_id=…` | seen; only used for a barcode answer that is just an id |
-| **Servings and fields**: `food_id`, `food_name`, `food_type` (Brand/Generic), `brand_name`, `servings.serving[]` with `serving_id`, `serving_description`, `metric_serving_amount`, `metric_serving_unit`, `calories`, `carbohydrate`, `protein`, `fat`; one-item lists arrive as a single object | field names from a community client; **unverified** against the official v4 page. Read defensively. |
-| **Barcode**: `food.find_id_for_barcode` (v1 returns an id, v2 the whole food), GTIN-13, shorter codes zero-padded | the method exists; third-party docs say it is a **Premier** feature. **Unverified whether Basic includes it.** The REST path used (`…/food/barcode/find-by-id/v2`, scope `barcode`) is a guess from the pattern of the other paths. openGym tries it only for codes Open Food Facts does not know and, if FatSecret refuses the plan, remembers that for an hour and says so. |
-| **Basic limits**: 5,000 calls a day, US dataset only, English only, community support | seen on their editions page |
-| **IP registration**: calls from an unregistered IP are refused (error code 21, "Invalid IP address detected …") | from a FatSecret staff reply on their developer forum, not from the official docs |
-| **Attribution**: required for Basic; their policy asks for a badge or snippet in the app, on the app's website and in store listings; login-only apps need it somewhere reachable without logging in | policy page excerpt. **The exact snippet or badge was not seen**; openGym shows the text "Powered by fatsecret" as a link to https://www.fatsecret.com wherever their results appear. Check <https://platform.fatsecret.com/attribution> and tell us if a badge image is required. |
-| **Caching / storing**: user data may not be cached for more than 24 hours, except values explicitly "storable indefinitely"; per their Storable Data guide that is the ids (`food_id`, `serving_id`, …), not names, brands or nutrition numbers | seen in their Storable Data guide excerpt |
-| **Error codes** other than 21 (rate limit, bad token, plan) | **unverified**; mapped by code and by message wording, unknown ones become "sent something unreadable" |
+| **Token** | `POST https://oauth.fatsecret.com/connect/token`, Client ID and Secret as HTTP Basic, body `grant_type=client_credentials&scope=basic`. The token is a JWT; the admin Test button reads its `scope` claim (only that) to show what was granted. The token itself is never shown or logged. |
+| **Search** | `GET https://platform.fatsecret.com/rest/foods/search/v1?search_expression=…&max_results=…&page_number=…&format=json`, scope `basic`. No Premier parameter is ever sent (`generic_description`, `region`, `language`, `include_food_images`, `include_food_attributes`, `flag_default_serving`, `include_sub_categories`). One result arrives as an object, several as an array, none with no `food` key; all three are handled. |
+| **What a search row holds** | name, brand, Brand/Generic and one summary line: `Per 1 serving - Calories: 300kcal \| Fat: 13.00g \| Carbs: 32.00g \| Protein: 15.00g` (or `Per 100g - …`). That is all the list shows: one line of calories and macros. |
+| **Details** | When a result is tapped, `GET …/rest/food/v5?food_id=…&format=json` (scope `basic`) returns every serving with its nutrients, including the standardised 100 g one (`serving_id` 0). If it fails, the summary serving still works and the app says why the others are missing. |
+| **Barcode** | **Not available on Basic** (`food.find_id_for_barcode` is Premier Exclusive, scope `premier barcode`). openGym no longer asks FatSecret for barcodes. Open Food Facts stays the barcode source. |
+| **Limits** | 5,000 calls a day, US data, English. |
+| **Attribution** | required; openGym shows "Powered by fatsecret" as a link to https://www.fatsecret.com wherever results appear. |
+| **Storable data** | only ids may be stored; other data may be cached up to 24 hours (see below). |
+
+### Error codes, by their documented code only
+
+| Code | Meaning (FatSecret) | What openGym says / does |
+|---|---|---|
+| **14** | OAuth 2.0: Missing scope | "Your FatSecret key does not include this feature; the free Basic edition has no access to it." Never retried. |
+| **13** | Invalid token | a new token is fetched and the call repeated **once**; refused again → named, not retried |
+| **21** | Invalid IP address | "register the server's public IP address"; the echoed address is never shown or logged. Never retried. |
+| **11, 12** | rate limits (per FatSecret’s error-codes guide) | the only codes called a rate limit (plus HTTP 429); never retried |
+| other | anything else | "FatSecret answered with an error (code N): <sanitised message>", never retried, never called a rate limit |
+
+The message FatSecret sends is cleaned before it is shown: control characters removed, addresses replaced by
+`[address]`, token-like strings by `[hidden]`, at most 160 characters. The admin card shows the last problem with
+its code, and the (admin-only) debug capture records the same.
+
+### The Test button
+
+**Test keys** requests a token, reads the granted scopes from it, then runs one tiny search (`apple`,
+`max_results=1`). It shows: token OK (or why not), the scopes granted, and search OK (or the exact FatSecret code,
+its message and what it means). **Test presses are not counted against the daily budget.**
+
+### Later option: Premier Free
+
+FatSecret has a free **Premier Free** tier for start-ups, non-profits and students (it needs verification and
+attribution). It could unlock the Premier features (richer search, barcode) later. openGym does not need it and
+nothing here depends on it.
 
 ## What openGym does about the terms
 
-* **Caching.** Search results are kept in memory for 10 minutes only and never written to disk. The OAuth token is
+* **Caching.** Search results and tapped-food details are kept in memory for 10 minutes only and never written to disk. The OAuth token is
   kept in memory until a minute before it expires. A food logged from FatSecret appears in **Recent** for 24 hours
   and is then removed (it cannot be starred). The numbers in a **diary entry** are the person's own record of what
   they ate and stay: that is the one place where FatSecret's wording ("only ids may be stored") could be read more
   strictly than we have. If you want the strict reading, say so and FatSecret entries will keep only the food's
   name and the logged numbers you type, or be re-fetched on view.
-* **Privacy.** FatSecret receives the search words or the barcode digits and the app's token, nothing else: no
+* **Privacy.** FatSecret receives the search words or the tapped food's id and the app's token, nothing else: no
   profile, no diary, no IP of a phone. What is saved from a FatSecret food is the same snapshot as for the other
   sources: name, brand, serving label, grams and the macros.
 * **Budget.** The server stops at **4,000 calls a day** (never configurable above 5,000) and each person at
   **400 a day**, counted in `data/nutrition/fatsecret-usage.json` (so a restart does not reset it) per UTC day.
-  Environment variables `NUTRITION_FATSECRET_DAILY_CAP` and `NUTRITION_FATSECRET_USER_CAP` change them. A search
-  that comes from the 10-minute cache costs no call. A message names the limit that was reached.
-* **Errors.** Wrong keys, a refused IP address, rate limits, timeouts and an outage are each named in a line under
-  the search; a timeout or outage has a Retry, the others do not (asking again cannot help). One automatic retry is
-  made for timeouts and outages. The server log gets one short line a minute per reason (kind and FatSecret's error
+  Environment variables `NUTRITION_FATSECRET_DAILY_CAP` and `NUTRITION_FATSECRET_USER_CAP` change them. A search or
+  a tapped food (food.get) costs one call each; one from the 10-minute cache costs none. A message names the limit that was reached.
+* **Errors.** Wrong keys, a missing scope, a refused IP address, rate limits, timeouts and an outage are each named in a
+  line under the search; a timeout or outage has a Retry, the others do not (asking again cannot help). One
+  automatic retry is made for timeouts and outages only. The server log gets one short line a minute per reason (kind and FatSecret's error
   code), never a key, token, address or search text.
 
 ## Outbound hosts the server must reach

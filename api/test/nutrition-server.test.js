@@ -370,10 +370,14 @@ test('FatSecret through the real server: keys saved encrypted, token + search wi
     const send = (code, obj) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(obj)); };
     const u = new URL(req.url, 'http://x');
     if (u.pathname === '/fs/connect/token') { calls.token.push(req.headers.authorization); return send(200, { access_token: 'tok-' + calls.token.length, expires_in: 86400, token_type: 'Bearer' }); }
-    if (u.pathname === '/fs/rest/foods/search/v4') {
-      calls.api.push({ auth: req.headers.authorization, q: u.searchParams.get('search_expression') });
+    if (u.pathname === '/fs/rest/foods/search/v1') {
+      calls.api.push({ auth: req.headers.authorization, q: u.searchParams.get('search_expression'), path: u.pathname });
       if (mode.ip) return send(200, { error: { code: 21, message: "Invalid IP address detected: '198.51.100.7'" } });
-      return send(200, { foods_search: { max_results: '20', total_results: '1', page_number: '0', results: { food: { food_id: '3001', food_name: 'Taquitos, Beef & Cheese', food_type: 'Brand', brand_name: '7-Eleven', servings: { serving: [{ serving_id: '5001', serving_description: '1 taquito', metric_serving_amount: '76.000', metric_serving_unit: 'g', calories: '190', carbohydrate: '20', protein: '7', fat: '9' }] } } } } });
+      return send(200, { foods: { max_results: '20', total_results: '1', page_number: '0', food: { food_id: '3001', food_name: 'Taquitos, Beef & Cheese', food_type: 'Brand', brand_name: '7-Eleven', food_description: 'Per 1 taquito - Calories: 190kcal | Fat: 9.00g | Carbs: 20.00g | Protein: 7.00g', food_url: 'https://www.fatsecret.com/x' } } });
+    }
+    if (u.pathname === '/fs/rest/food/v5') {
+      calls.api.push({ auth: req.headers.authorization, id: u.searchParams.get('food_id'), path: u.pathname });
+      return send(200, { food: { food_id: '3001', food_name: 'Taquitos, Beef & Cheese', food_type: 'Brand', brand_name: '7-Eleven', servings: { serving: [{ serving_id: '5001', serving_description: '1 taquito', metric_serving_amount: '76.000', metric_serving_unit: 'g', calories: '190', carbohydrate: '20', protein: '7', fat: '9' }] } } });
     }
     send(404, {});
   });
@@ -399,7 +403,12 @@ test('FatSecret through the real server: keys saved encrypted, token + search wi
   assert.equal(r.status, 200, h.log);
   assert.deepEqual(r.body.sources.fatsecret, { ok: true, count: 1 });
   assert.equal(r.body.results[0].source, 'fatsecret');
-  assert.equal(r.body.results[0].bases[0].label, '1 taquito (76 g)');
+  assert.equal(r.body.results[0].partial, true, 'a search row is the summary line only');
+  assert.equal(calls.api[0].path, '/fs/rest/foods/search/v1');
+  const one = await h.call('GET', '/api/nutrition/fatsecret/food?id=3001', USER);
+  assert.equal(one.status, 200, h.log);
+  assert.equal(one.body.food.bases[0].label, '1 taquito (76 g)');
+  assert.equal(calls.api[1].path, '/fs/rest/food/v5');
   assert.equal(calls.token[0], 'Basic ' + Buffer.from(`${ID}:${SECRET}`).toString('base64'));
   assert.equal(calls.api[0].auth, 'Bearer tok-1');
   assert.equal(calls.api[0].q, '7-eleven taquitos');
@@ -407,7 +416,8 @@ test('FatSecret through the real server: keys saved encrypted, token + search wi
   r = await h.call('GET', '/api/nutrition/search?q=taquitos', USER);
   assert.ok(r.body.sources.fatsecret.ok && r.body.sources.off && r.body.sources.usda);
   const test = await h.call('POST', '/api/admin/nutrition/test-fatsecret', ADMIN);
-  assert.equal(test.body.ok, true);
+  assert.equal(test.body.ok, true, JSON.stringify(test.body));
+  assert.equal(test.body.search.count, 1);
   assert.ok(fs.existsSync(path.join(h.dataDir, 'nutrition', 'fatsecret-usage.json')), 'the daily budget is kept on disk');
   assert.ok((await h.call('GET', '/api/admin/nutrition', ADMIN)).body.fatsecretUsage.used >= 3);
 

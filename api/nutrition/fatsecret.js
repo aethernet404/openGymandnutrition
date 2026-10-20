@@ -1,33 +1,36 @@
 /* FatSecret Platform API (the free "Basic" edition) as a food source: restaurant, chain and convenience-store
  * foods that Open Food Facts and USDA do not have.
  *
- * WHAT THIS RELIES ON, and how sure we are of it (their own docs host, platform.fatsecret.com, could not be
- * opened from where this was written; what follows is from search-engine excerpts of those pages and of their
- * blog, plus third-party client libraries — see docs/NUTRITION_FATSECRET.md for the full list):
+ * WHAT THIS RELIES ON. The Basic edition is limited to two methods, both with scope `basic` (read from FatSecret's own
+ * method pages by the owner, who checked them against the Error Codes guide):
  *
- *   AUTH      OAuth 2.0 client credentials. POST https://oauth.fatsecret.com/connect/token, the Client ID and
- *             Secret as HTTP Basic credentials, form body grant_type=client_credentials&scope=basic. The answer
- *             has access_token and expires_in (seconds; one day in their example). Then every API call is a
- *             GET with `Authorization: Bearer <token>`. Seen in their guide.
- *   SEARCH    GET https://platform.fatsecret.com/rest/foods/search/v4?search_expression=…&max_results=…&
- *             page_number=0&format=json. v4 returns each food WITH its servings (the standardised 100 g ones
- *             too), so one call is one search. Path and parameters seen in their docs; the exact JSON field
- *             names below are from a community client and are read defensively.
- *   DETAIL    GET …/rest/food/v5?food_id=…&format=json. Only used for the barcode route below.
- *   BARCODE   food.find_id_for_barcode (v1 returns the id, v2 the whole food). The Premier editions have it;
- *             NOT verified that Basic does not, so it is tried, and a refusal is remembered for an hour and
- *             reported as "not in your plan". The REST path used here (…/food/barcode/find-by-id/v2) is a guess
- *             from the pattern of the others: unverified.
- *   LIMITS    Basic: 5,000 calls a day, US data, English, attribution required. Calls from a non-registered IP
- *             address are refused (error code 21, "Invalid IP address detected"): the server's public IP has to
- *             be added in their dashboard.
- *   STORING   Their guide says only ids (food_id, serving_id…) may be stored; everything else may be cached for
- *             24 hours at most. So: search results are kept in memory for 10 minutes and never written to disk;
- *             a food logged from here is kept in recents for 24 hours only (store.js).
+ *   AUTH     OAuth 2.0 client credentials. POST https://oauth.fatsecret.com/connect/token, the Client ID and Secret as HTTP
+ *            Basic credentials, form body grant_type=client_credentials&scope=basic. The answer has access_token (a JWT whose
+ *            `scope` claim lists what was granted) and expires_in. Every API call is a GET with `Authorization: Bearer`.
+ *   SEARCH   foods.search v1: GET …/rest/foods/search/v1?search_expression=…&max_results=…&page_number=0&format=json.
+ *            Each food has food_id, food_name, food_type (Brand | Generic), brand_name (Brand only), food_url and a one-line
+ *            food_description such as "Per 1 serving - Calories: 300kcal | Fat: 13.00g | Carbs: 32.00g | Protein: 15.00g".
+ *            QUIRK: `foods.food` is an ARRAY only when several foods come back, a single OBJECT for one, and absent for none.
+ *            No premier-only parameter is sent (region, language, generic_description, include_food_images, …).
+ *   DETAIL   food.get v5: GET …/rest/food/v5?food_id=…&format=json, asked only when a result is tapped or added: the real
+ *            servings (serving_id, serving_description, metric_serving_amount/unit, calories, carbohydrate, protein, fat,
+ *            saturated_fat, cholesterol, sodium, potassium, fiber, sugar, vitamin_a mcg, vitamin_c mg, vitamin_d mcg, calcium mg,
+ *            iron mg). For Brand foods number_of_units is 1, measurement_description is "serving", and a derived serving with
+ *            serving_id 0 (100 g, 100 ml or 1 oz and 100 g) is added.
+ *   NOT IN BASIC  foods.search v4 (Premier Exclusive, scope premier: it fails with error 14), and food.find_id_for_barcode
+ *            (Premier Exclusive, scope `premier barcode`): there is NO FatSecret barcode lookup here; Open Food Facts is the
+ *            barcode source.
+ *   ERRORS   An API error is an HTTP 200 with {"error":{"code":N,"message":…}}. Documented codes used: 13 invalid token
+ *            (a new token is fetched once), 14 missing scope (the key does not include this feature), 21 IP address not
+ *            registered, 11 and 12 the rate limits. Any other code is shown as it is, sanitised, and never retried.
+ *   LIMITS   Basic: 5,000 calls a day, US data, English, attribution required.
+ *   STORING  Only ids may be stored; everything else may be cached for 24 hours at most. So: search rows and food.get answers are
+ *            kept in memory for 10 minutes and never written to disk; a food logged from here stays in recents for 24 hours (store.js).
  *
- * Own safety nets: a per-profile and a server-wide daily budget of calls (persisted, so a restart does not reset
- * them), the OAuth token cached in memory until it expires, and nothing — no key, no secret, no token, no query —
- * ever written to a log. Only the Client ID and Secret an admin saved leave this module, and only to FatSecret.
+ * Own safety nets: a per-profile and a server-wide daily budget of calls (persisted, so a restart does not reset them; the
+ * admin Test button is not counted), the OAuth token cached in memory until it expires, and nothing — no key, no secret, no
+ * token, no search text — ever written to a log or shown. Only the Client ID and Secret an admin saved leave this module,
+ * and only to FatSecret.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -44,21 +47,29 @@ const API_BASE = () => (process.env.NUTRITION_FATSECRET_BASE || 'https://platfor
 export const SERVER_DAILY_CAP = () => Math.min(5000, Math.max(1, Number(process.env.NUTRITION_FATSECRET_DAILY_CAP) || 4000));
 export const USER_DAILY_CAP = () => Math.max(1, Number(process.env.NUTRITION_FATSECRET_USER_CAP) || 400);
 export const SEARCH_TTL = 10 * 60000;            // in memory only; well inside their 24-hour rule
-export const BARCODE_TTL = 60 * 60000;
-const PLAN_MEMORY = 60 * 60000;
 const MAX_BYTES = 2 * 1024 * 1024;
 const MAX_RESULTS = 20;
 const utcDay = ms => new Date(ms).toISOString().slice(0, 10);
 
+// FatSecret's documented rate-limit codes (Error Codes guide).
+const RATE_CODES = new Set([11, 12]);
 const TEXT = {
   auth: 'FatSecret rejected the Client ID or Secret. Check them in Goals → Admin → FatSecret.',
+  token: 'FatSecret rejected the access token, even after getting a new one. Check the Client ID and Secret.',
   ip: 'FatSecret refused this server’s IP address. In your FatSecret developer dashboard, add the server’s public IP address (the one your home connection shows to the internet) under IP Restrictions.',
   rate: 'FatSecret is rate-limiting requests; try again in a minute.',
-  plan: 'FatSecret barcode lookup is not part of the free Basic edition.',
+  plan: 'Your FatSecret key does not include this feature; the free Basic edition has no access to it.',
   timeout: 'FatSecret did not answer in time.',
   down: 'FatSecret is not answering right now.',
   bad: 'FatSecret sent something unreadable.'
 };
+/** What a code means, for the admin (the code and message are shown beside it). */
+export const CODE_MEANING = { 11: TEXT.rate, 12: TEXT.rate, 13: 'Invalid access token.', 14: 'Missing scope: ' + TEXT.plan, 21: TEXT.ip };
+/** FatSecret's own message, made safe to show: control characters out, anything address- or token-shaped hidden, short. */
+export function sanitizeMessage(m) {
+  return String(m ?? '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\b\d{1,3}(?:\.\d{1,3}){3}\b/g, '[address]').replace(/[0-9a-f:]{6,}:[0-9a-f:]+/gi, '[address]')
+    .replace(/[A-Za-z0-9._~+/=-]{30,}/g, '[hidden]').replace(/\s+/g, ' ').trim().slice(0, 160);
+}
 const err = (kind, message, text) => new LookupError(kind, message, text || TEXT[kind]);
 
 /* ------------------------------ a daily budget ------------------------------ */
@@ -127,6 +138,8 @@ export function normaliseFood(f) {
   if (!f || typeof f !== 'object' || f.food_id == null) return null;
   const name = clean(f.food_name, 120);
   if (!name) return null;
+  const brandName = clean(f.brand_name, 60);
+  const isBrand = String(f.food_type || '').toLowerCase() === 'brand' || !!brandName;
   const servings = listOf(f.servings?.serving ?? f.servings);
   const real = [], standard = [];
   for (const s of servings) {
@@ -136,7 +149,7 @@ export function normaliseFood(f) {
     const grams = servingWeight(s);
     const desc = clean(s.serving_description || s.measurement_description, 60);
     const is100 = grams === 100 && (String(s.serving_id) === '0' || /^100\s?(g|ml)\b/i.test(desc) || !desc);
-    const micros = microsFromFatSecret(s);
+    const micros = microsFromFatSecret(s, { brand: isBrand });
     if (is100) { standard.push({ label: '100 g', grams: 100, per, ...(hasMicros(micros) ? { micros } : {}) }); continue; }
     let label = desc || (grams ? `${grams} g` : '1 serving');
     if (grams && !/\d\s?(g|ml)\b/i.test(label) && !/\(.*\)/.test(label)) label = `${label} (${grams} g)`.slice(0, 60);
@@ -147,8 +160,47 @@ export function normaliseFood(f) {
   const bases = [...real, ...standard].filter(b => { const k = b.label + '|' + b.per.calories; if (seen.has(k)) return false; seen.add(k); return true; })
     .slice(0, 5).map(({ label, grams, per, micros }) => ({ label, grams, per, ...(micros ? { micros } : {}) }));
   if (!bases.length) return null;
+  return { source: 'fatsecret', kind: isBrand ? 'brand' : 'generic', ext: String(f.food_id), name, brand: brandName, bases };
+}
+
+/**
+ * A foods.search v1 row → a hit with ONE base read from its one-line description, flagged `partial`: the real servings
+ * come from food.get v5 when the person taps it. "Per 1 serving - Calories: 300kcal | Fat: 13.00g | Carbs: 32.00g | Protein:
+ * 15.00g" and "Per 100g - Calories: 22kcal | …" are the two forms the docs show; anything else is not a usable row.
+ */
+const DESC_RE = /^per\s+(.+?)\s+-\s+calories:\s*([\d.,]+)\s*kcal\s*\|\s*fat:\s*([\d.,]+)\s*g\s*\|\s*carbs:\s*([\d.,]+)\s*g\s*\|\s*protein:\s*([\d.,]+)\s*g/i;
+export function normaliseSearchRow(f) {
+  if (!f || typeof f !== 'object' || f.food_id == null) return null;
+  const name = clean(f.food_name, 120);
+  const m = DESC_RE.exec(String(f.food_description || '').trim());
+  if (!name || !m) return null;
+  const n = x => num(String(x).replace(',', '.'));
+  const calories = n(m[2]);
+  if (calories == null) return null;
+  const raw = clean(m[1], 60);
+  const simple = /^(\d+(?:\.\d+)?)\s?(g|ml)$/i.exec(raw);
+  const label = simple ? `${Number(simple[1])} ${simple[2].toLowerCase()}` : raw;
+  const grams = simple ? (sensibleGrams(Number(simple[1])) ? round(Number(simple[1]), 1) : null) : chooseServingGrams(null, raw);
   const brand = clean(f.brand_name, 60);
-  return { source: 'fatsecret', kind: String(f.food_type || '').toLowerCase() === 'brand' || brand ? 'brand' : 'generic', ext: String(f.food_id), name, brand, bases };
+  return {
+    source: 'fatsecret', kind: String(f.food_type || '').toLowerCase() === 'brand' || brand ? 'brand' : 'generic', ext: String(f.food_id), name, brand, partial: true,
+    bases: [{ label, grams, per: { calories: Math.round(clampMacro(calories, 20000)), protein_g: round(clampMacro(n(m[5]) ?? 0, 2000), 1), carbs_g: round(clampMacro(n(m[4]) ?? 0, 2000), 1), fat_g: round(clampMacro(n(m[3]) ?? 0, 2000), 1) } }]
+  };
+}
+
+/** The scopes a token grants, from its JWT `scope` claim (the token itself is never shown), or null if it cannot be read. */
+export function scopesOfToken(t, fallback) {
+  const clean_ = v => [].concat(v ?? []).flatMap(x => String(x).split(/\s+/)).filter(x => /^[\w.:-]{1,40}$/.test(x));
+  try {
+    const parts = String(t).split('.');
+    if (parts.length === 3) {
+      const claims = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));
+      const c = clean_(claims.scope ?? claims.scp);
+      if (c.length) return c;
+    }
+  } catch { /* not a JWT */ }
+  const f = clean_(fallback);
+  return f.length ? f : null;
 }
 
 /* ------------------------------ the service ------------------------------ */
@@ -170,7 +222,7 @@ export function createFatSecret({
   const tokens = new Map();          // `${clientId}|${scope}` → { token, until }
   const pending = new Map();         // the same, while a token is being fetched
   const cache = new Map();           // search results, in memory only
-  let noBarcodeUntil = 0;
+  let lastError = null;               // the last failure, sanitised, for the admin card
 
   const remember = (key, value, ttl) => { if (cache.size >= 200) cache.delete(cache.keys().next().value); cache.set(key, { value, until: now() + ttl }); return value; };
   const recall = key => { const h = cache.get(key); if (!h) return undefined; if (h.until < now()) { cache.delete(key); return undefined; } return h.value; };
@@ -204,25 +256,26 @@ export function createFatSecret({
       if (res.status >= 500) throw err('down', 'HTTP ' + res.status);
       if (!res.ok) {
         const e = String(body?.error || '');
-        if (e === 'invalid_scope' || e === 'unauthorized_client') throw err('plan', 'scope refused', scope.includes('barcode') ? TEXT.plan : 'FatSecret did not grant access to its food search with these keys.');
+        if (e === 'invalid_scope' || e === 'unauthorized_client') throw err('plan', 'scope refused', TEXT.plan);
         throw err('auth', 'HTTP ' + res.status);
       }
       if (!body || typeof body.access_token !== 'string' || !body.access_token) throw err('bad', 'no access_token');
       const life = Math.max(60, Math.min(Number(body.expires_in) || 3600, 86400));
-      tokens.set(key, { token: body.access_token, until: now() + (life - 60) * 1000 });
+      tokens.set(key, { token: body.access_token, until: now() + (life - 60) * 1000, scope: body.scope });
       return body.access_token;
     })().finally(() => pending.delete(key));
     pending.set(key, p);
     return p;
   }
 
-  /** What FatSecret's own error object means, in our kinds. Codes are from their forum and clients (unverified). */
+  /** FatSecret's own error object → our kinds, by the documented CODE only (never by guessing at the wording). */
   function apiError(e) {
-    const code = e?.code, msg = String(e?.message || '');
-    if (code === 21 || /invalid ip|ip address/i.test(msg)) return err('ip', 'code ' + code, TEXT.ip);
-    if (/limit|too many|exceed|throttl/i.test(msg) || code === 14 || code === 15) return err('rate', 'code ' + code);
-    if ([2, 5, 8, 9, 10, 12, 13].includes(code) || /token|oauth|credential|signature|consumer|client/i.test(msg)) return Object.assign(err('auth', 'code ' + code), { expired: /token|expired/i.test(msg) || code === 13 });
-    return err('bad', 'code ' + code);
+    const code = Number(e?.code);
+    if (code === 14) return err('plan', 'code 14', TEXT.plan);                       // missing scope: the key does not include this feature
+    if (code === 21) return err('ip', 'code 21', TEXT.ip);
+    if (code === 13) return Object.assign(err('auth', 'code 13', TEXT.token), { expired: true });   // invalid token: a new one, once
+    if (RATE_CODES.has(code)) return err('rate', 'code ' + code);
+    return err('bad', 'code ' + code, `FatSecret answered with an error (code ${Number.isFinite(code) ? code : '?'}): ${sanitizeMessage(e?.message) || 'no message'}`);
   }
 
   /**
@@ -230,14 +283,14 @@ export function createFatSecret({
    * not a rejected key, a refused IP, or a rate limit: asking again only makes those worse). A token that expired
    * early is replaced once, silently.
    */
-  async function call(pathname, params, creds, { uid = null, scope = 'basic', deadline = now() + budgetMs } = {}) {
+  async function call(pathname, params, creds, { uid = null, scope = 'basic', deadline = now() + budgetMs, budget = true } = {}) {
     let last;
     let refreshed = false;
     for (let n = 0; n < 2; n++) {
       const left = deadline - now();
       if (n > 0 && left < 1500) break;
       const ms = Math.max(200, Math.min(n === 0 ? timeoutMs : retryTimeoutMs, left));
-      const over = usage?.take(uid);
+      const over = budget ? usage?.take(uid) : null;
       if (over) throw err('limit', 'budget ' + over, over === 'user'
         ? `You have used today’s FatSecret lookups (${USER_DAILY_CAP()} per person). It resets at midnight UTC.`
         : `This server has used its FatSecret budget for today (${SERVER_DAILY_CAP()} of the free 5,000 calls). It resets at midnight UTC.`);
@@ -254,70 +307,62 @@ export function createFatSecret({
         if (!res.ok) throw err('bad', 'HTTP ' + res.status);
         const body = await readJson(res, 'api');
         if (!body || typeof body !== 'object' || Array.isArray(body)) throw err('bad', 'not an object');
-        if (body.error) throw Object.assign(apiError(body.error), { fsCode: body.error.code, fsBody: body });
+        if (body.error) throw Object.assign(apiError(body.error), { fsCode: Number(body.error.code), fsMessage: sanitizeMessage(body.error.message) });
         return body;
       } catch (e) {
         last = e instanceof LookupError ? e : err('down', String(e?.message || e));
         if (last.expired && !refreshed) { refreshed = true; tokens.delete(creds.clientId + '|' + scope); n--; continue; }   // a stale token is replaced for free
-        if (!['timeout', 'down', 'bad'].includes(last.kind)) break;
+        if (!['timeout', 'down', 'bad'].includes(last.kind) || last.fsCode !== undefined) break;   // an error code is an answer, not a hiccup
         if (n === 0) await sleep(retryDelayMs);
       }
     }
-    logReason(pathname.startsWith('foods/search') ? 'search' : 'barcode lookup', last.kind, last.fsCode, now, log);
+    lastError = { at: now(), kind: last.kind, code: last.fsCode ?? null, message: last.fsMessage || null, text: last.text || null };
+    logReason(pathname.startsWith('foods/search') ? 'search' : 'food lookup', last.kind, last.fsCode, now, log);
     throw last;
   }
 
-  /** @returns the normalised hits for a search (unranked: lookup.js ranks every source the same way) */
-  async function search(q, creds, { uid = null, fresh = false } = {}) {
-    const key = 'fs|' + creds.clientId + '|' + q.toLowerCase();
+  /** @returns the normalised hits for a search (unranked: lookup.js ranks every source the same way). Rows carry one base from their summary line. */
+  async function search(q, creds, { uid = null, fresh = false, budget = true, max = MAX_RESULTS } = {}) {
+    const key = 'fs|' + creds.clientId + '|' + max + '|' + q.toLowerCase();
     if (fresh) cache.delete(key);
     const hit = recall(key); if (hit) return hit;
-    const body = await call('foods/search/v4', { search_expression: q, max_results: String(MAX_RESULTS), page_number: '0' }, creds, { uid });
-    if (!body.foods_search || typeof body.foods_search !== 'object') {
+    const body = await call('foods/search/v1', { search_expression: q, max_results: String(max), page_number: '0' }, creds, { uid, budget });
+    if (!body.foods || typeof body.foods !== 'object' || Array.isArray(body.foods)) {
       logReason('search', 'bad', 'shape-' + Object.keys(body).slice(0, 4).map(k => k.replace(/[^\w]/g, '').slice(0, 16)).join(','), now, log);
       throw err('bad', 'unexpected shape');
     }
-    const hits = listOf(body.foods_search.results?.food).map(normaliseFood).filter(Boolean);
+    // One food is an object, several are an array, none is no `food` key at all.
+    const hits = listOf(body.foods.food).map(normaliseSearchRow).filter(Boolean);
     return remember(key, hits, SEARCH_TTL);
   }
 
-  /**
-   * Barcode → { found, product? , unavailable? }. Tried only for scans Open Food Facts did not know. A refusal for
-   * the plan is remembered for an hour so the free edition is not asked every time.
-   */
-  async function barcode(code, creds, { uid = null } = {}) {
-    if (now() < noBarcodeUntil) return { found: false, unavailable: 'plan' };
-    let gtin = code;
-    if (code.length === 14 && code[0] === '0') gtin = code.slice(1);
-    if (gtin.length > 13) return { found: false, unavailable: 'format' };
-    gtin = gtin.padStart(13, '0');
-    const key = 'fsbc|' + creds.clientId + '|' + gtin;
+  /** The full food (every real serving) for one search result, asked when it is tapped. Cached like a search. */
+  async function food(id, creds, { uid = null } = {}) {
+    const key = 'fsfood|' + creds.clientId + '|' + id;
     const hit = recall(key); if (hit) return hit;
-    try {
-      let body = await call('food/barcode/find-by-id/v2', { barcode: gtin }, creds, { uid, scope: 'basic barcode' });
-      let food = body.food;
-      const id = body.food_id?.value ?? (typeof body.food_id === 'string' ? body.food_id : null);
-      if (!food && id) food = (await call('food/v5', { food_id: String(id) }, creds, { uid, scope: 'basic barcode' })).food;
-      const product = normaliseFood(food);
-      return remember(key, product ? { found: true, product } : { found: false }, product ? BARCODE_TTL : 5 * 60000);
-    } catch (e) {
-      // "No food for this barcode" is an answer, not a failure (the code is from forum posts: unverified).
-      if (e.fsCode === 211 || /no food|not found|no match/i.test(String(e.fsBody?.error?.message || ''))) return remember(key, { found: false }, 5 * 60000);
-      const refused = e.kind === 'plan' || (e.kind === 'auth' && /scope|permission|premier|not (available|allowed|included)/i.test(String(e.fsBody?.error?.message || '')));
-      if (refused) { noBarcodeUntil = now() + PLAN_MEMORY; return { found: false, unavailable: 'plan' }; }
-      throw e;
-    }
+    const body = await call('food/v5', { food_id: String(id) }, creds, { uid });
+    const f = normaliseFood(body.food);
+    if (!f) throw err('bad', 'no usable food in the answer');
+    return remember(key, f, SEARCH_TTL);
   }
 
-  /** For the admin's Test button: can we get a token, can we search, and does this plan allow barcodes. */
-  async function test(creds, { uid = null } = {}) {
-    tokens.clear();                    // a fresh look at what these keys are allowed, not a remembered answer
-    const hits = await search('apple', creds, { uid, fresh: true });
-    let barcodeScope = 'unknown';
-    try { await token(creds, 'basic barcode', timeoutMs); barcodeScope = 'available'; }
-    catch (e) { barcodeScope = e.kind === 'plan' ? 'not-in-plan' : 'unknown'; }
-    return { count: hits.length, barcode: barcodeScope };
+  /**
+   * For the admin's Test button, in the order that would fail: a token (its granted scopes read from the JWT's `scope` claim),
+   * then a tiny search (v1, "apple", one result). Not counted against the daily budget. Never returns the token.
+   */
+  async function test(creds) {
+    const info = e => ({ ok: false, kind: e?.kind || 'down', text: e?.text || TEXT.down, code: e?.fsCode ?? null, message: e?.fsMessage || null, meaning: CODE_MEANING[e?.fsCode] || null });
+    tokens.clear();
+    let bearer;
+    try { bearer = await token(creds, 'basic', timeoutMs); } catch (e) { lastError = { at: now(), kind: e?.kind || 'down', code: null, message: null, text: e?.text || null }; return { token: info(e), search: null }; }
+    const out = { token: { ok: true, scopes: scopesOfToken(bearer, tokens.get(creds.clientId + '|basic')?.scope) }, search: null };
+    try { const hits = await search('apple', creds, { fresh: true, budget: false, max: 1 }); out.search = { ok: true, count: hits.length }; }
+    catch (e) { out.search = info(e); }
+    return out;
   }
 
-  return { search, barcode, test, usage, _tokens: tokens, _cache: cache, forget() { tokens.clear(); cache.clear(); noBarcodeUntil = 0; } };
+  /** The last failure (sanitised), for the admin card. */
+  const status = () => ({ lastError });
+
+  return { search, food, test, status, usage, _tokens: tokens, _cache: cache, forget() { tokens.clear(); cache.clear(); lastError = null; } };
 }

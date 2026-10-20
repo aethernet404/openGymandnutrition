@@ -124,13 +124,17 @@ test('USDA bases carry micros per 100 g and per label serving', () => {
 
 /* ------------------------------ FatSecret ------------------------------ */
 
-test('FatSecret: the plain-unit fields are read; the percent-of-Daily-Value ones are NOT converted', () => {
+test('FatSecret: plain-unit fields are read; vitamin A/C/D, calcium and iron are amounts; a Brand food’s 0 for those five is unknown, a Generic food’s 0 is real', () => {
   const serving = { serving_id: '1', serving_description: '1 taquito', metric_serving_amount: '76', metric_serving_unit: 'g', calories: '190', carbohydrate: '20', protein: '7', fat: '9',
-    fiber: '1', sugar: '2', saturated_fat: '3.5', sodium: '420', cholesterol: '15', potassium: '110', vitamin_a: '10', vitamin_c: '2', calcium: '8', iron: '6' };
-  assert.deepEqual(S.microsFromFatSecret(serving), { fiber_g: 1, sugar_g: 2, satfat_g: 3.5, sodium_mg: 420, cholesterol_mg: 15, potassium_mg: 110 });
-  assert.deepEqual(S.microsFromFatSecret({ calories: '100', calcium: '8' }), {});
+    fiber: '1', sugar: '2', saturated_fat: '3.5', sodium: '420', cholesterol: '15', potassium: '110', vitamin_a: '10', vitamin_c: '2', vitamin_d: '0', calcium: '0', iron: '0' };
+  const plain = { fiber_g: 1, sugar_g: 2, satfat_g: 3.5, sodium_mg: 420, cholesterol_mg: 15, potassium_mg: 110 };
+  assert.deepEqual(S.microsFromFatSecret(serving, { brand: true }), { ...plain, vit_a_mcg: 10, vit_c_mg: 2 });
+  assert.deepEqual(S.microsFromFatSecret(serving, { brand: false }), { ...plain, vit_a_mcg: 10, vit_c_mg: 2, vit_d_mcg: 0, calcium_mg: 0, iron_mg: 0 });
+  assert.deepEqual(S.microsFromFatSecret({ calories: '100', calcium: '8' }, { brand: true }), { calcium_mg: 8 });
+  assert.deepEqual(S.microsFromFatSecret({ calories: '100', calcium: '0' }, { brand: true }), {});
   const hit = normaliseFood({ food_id: '9', food_name: 'Taquito', food_type: 'Brand', brand_name: '7-Eleven', servings: { serving: serving } });
   assert.equal(hit.bases[0].micros.sodium_mg, 420);
+  assert.ok(!('iron_mg' in hit.bases[0].micros));
   const bare = normaliseFood({ food_id: '9', food_name: 'Taquito', servings: { serving: { serving_id: '1', serving_description: '1', metric_serving_amount: '50', metric_serving_unit: 'g', calories: '100', carbohydrate: '1', protein: '1', fat: '1' } } });
   assert.ok(!('micros' in bare.bases[0]));
 });
