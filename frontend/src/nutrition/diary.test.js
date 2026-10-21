@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
-  shiftISO, validISO, relativeDay, mealForHour, fraction, remaining, macroSplit, kcalFromMacros,
-  scaleFood, parseAmount, quickBody, foodBody, goalsBody, macroLine, kgToUnit, weightText, workoutLine, weightTrend, sparkPath, entryBase, scaleEntry, gramsForQty, qtyForGramsOf, amountPatch, findDuplicate, foodFromEntry, savedFoodBody, savedFields, savedOverrides
+  shiftISO, validISO, relativeDay, mealForHour, fraction, remaining, kcalFromMacros,
+  scaleFood, quickBody, foodBody, goalsBody, macroLine, kgToUnit, weightText, workoutLine, weightTrend, sparkPath, entryBase, scaleEntry, gramsForQty, qtyForGramsOf, amountPatch, findDuplicate, foodFromEntry, savedFoodBody, savedFields, savedOverrides
 } from './diary.js'
 
 describe('dates', () => {
@@ -48,11 +48,7 @@ describe('progress', () => {
     expect(remaining(2500.5, 2400)).toBe(-100.5)
     expect(remaining(10, null)).toBe(null)
   })
-  it('splits calories by macro at 4/4/9 and always sums to 100', () => {
-    expect(macroSplit({})).toEqual({ protein_g: 0, carbs_g: 0, fat_g: 0 })
-    const s = macroSplit({ protein_g: 30, carbs_g: 50, fat_g: 20 })
-    expect(s.protein_g + s.carbs_g + s.fat_g).toBe(100)
-    expect(s.carbs_g).toBe(Math.round(200 / 500 * 100))
+  it('the calories the macros add up to (4/4/9)', () => {
     expect(kcalFromMacros({ protein_g: 30, carbs_g: 50, fat_g: 20 })).toBe(500)
   })
 })
@@ -68,13 +64,6 @@ describe('foods', () => {
 })
 
 describe('forms', () => {
-  it('parseAmount accepts comma decimals, blanks, and refuses junk', () => {
-    expect(parseAmount('1,5')).toBe(1.5)
-    expect(parseAmount(' 12 ')).toBe(12)
-    expect(parseAmount('')).toBe(null)
-    expect(parseAmount('abc')).toBeNaN()
-    expect(parseAmount('-3')).toBeNaN()
-  })
   it('quick add needs calories, defaults the rest, names itself', () => {
     expect(quickBody({ meal: 'lunch' }, '2026-10-12').ok).toBe(false)
     const r = quickBody({ meal: 'lunch', calories: 300, protein_g: 20 }, '2026-10-12')

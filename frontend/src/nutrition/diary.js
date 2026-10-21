@@ -44,14 +44,6 @@ export function fraction(value, goal) {
 /** What is left of a goal; negative once over it. null when there is no goal. */
 export const remaining = (value, goal) => (goal > 0 ? Math.round(((goal - (value || 0)) + Number.EPSILON) * 10) / 10 : null)
 
-/** Share of calories from each macro (4/4/9 kcal per gram), as whole percent. Zeros when empty. */
-export function macroSplit(t) {
-  const p = (t.protein_g || 0) * 4, c = (t.carbs_g || 0) * 4, f = (t.fat_g || 0) * 9
-  const sum = p + c + f
-  if (!sum) return { protein_g: 0, carbs_g: 0, fat_g: 0 }
-  return { protein_g: Math.round(p / sum * 100), carbs_g: Math.round(c / sum * 100), fat_g: Math.max(0, 100 - Math.round(p / sum * 100) - Math.round(c / sum * 100)) }
-}
-
 /** Calories the macros alone add up to. */
 export const kcalFromMacros = t => Math.round(4 * (t.protein_g || 0) + 4 * (t.carbs_g || 0) + 9 * (t.fat_g || 0))
 
@@ -64,13 +56,6 @@ export function scaleFood(food, qty) {
     protein_g: r(food.per.protein_g * q, 1), carbs_g: r(food.per.carbs_g * q, 1), fat_g: r(food.per.fat_g * q, 1),
     grams: food.serving?.grams ? r(food.serving.grams * q, 1) : null
   }
-}
-
-/** A text box → number | null. Accepts "1,5"; anything that is not a finite number ≥ 0 is NaN. */
-export function parseAmount(s) {
-  if (s == null || String(s).trim() === '') return null
-  const n = Number(String(s).trim().replace(',', '.'))
-  return Number.isFinite(n) && n >= 0 ? n : NaN
 }
 
 /** Compact "P 24 · C 3 · F 1.5" line for a list row. */

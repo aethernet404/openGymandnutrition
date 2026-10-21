@@ -1,4 +1,4 @@
-/* Food lookups: Open Food Facts (search + barcode) and USDA FoodData Central (search).
+/* Food lookups: Open Food Facts (search + barcode) and USDA FoodData Central (search, and the stand-in lookups for micronutrients).
  *
  * The outside world is slow, rate-limited and sometimes down, and its data is uneven, so this
  * module is written around these rules:
@@ -373,9 +373,7 @@ export function createLookup({
 
   /** @returns {{ found: boolean, product?: object, error?: string, kind?: string }}
    *  Open Food Facts only: FatSecret's barcode lookup is a Premier feature, not part of the free Basic edition. */
-  async function barcode(code) { return barcodeOff(code); }
-
-  async function barcodeOff(code) {
+  async function barcode(code) {
     const key = 'bc|' + code;
     const hit = recall(key); if (hit) return hit;
     try {

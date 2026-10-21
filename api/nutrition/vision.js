@@ -22,8 +22,6 @@ import { SYSTEM_PROMPT, photoPrompt, textPrompt, repairSuffix } from './prompt.j
 const PKG = '@anthropic-ai/claude-agent-sdk';
 const OUTPUT_CAP = 4 * 1024 * 1024;
 
-export const IMAGE_TYPES = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif' };
-
 /** The type from the bytes, never from a filename or a client's claim. */
 export function sniffImageType(buf) {
   if (buf.length > 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return 'image/jpeg';

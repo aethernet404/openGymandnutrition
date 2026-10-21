@@ -745,7 +745,7 @@ function readBody(req, limit = MAX_BODY) {      // `limit`: a route that expects
         // reset before it has parsed the answer reports a dropped connection instead of the
         // 413. A client that keeps streaming past twice the cap is not a mistaken one, and is
         // cut off.
-        if (size > 2 * limit) req.destroy();
+        if (size > 2 * MAX_BODY) req.destroy();
         return;
       }
       if (size > limit) {

@@ -9,7 +9,7 @@ import { useUI } from '../store/useUI.js'
 import { nt } from './i18n.js'
 import * as nutri from './api.js'
 import { foodBody } from './diary.js'
-import { BY_KEY, COMMON_SUPPLEMENT_KEYS, cleanMicros, hasMicros, microsForSend, scaleMicros } from './micros.js'
+import { BY_KEY, COMMON_SUPPLEMENT_KEYS, hasMicros, microsForSend, scaleMicros } from './micros.js'
 import { DuplicateChoice, MoreNutrients, openFoodSheet } from './sheets.jsx'
 
 const toast = m => useUI.getState().toast(m)

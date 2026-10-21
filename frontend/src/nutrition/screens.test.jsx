@@ -22,7 +22,7 @@ const m = vi.hoisted(() => ({
   api: {
     getDay: vi.fn(), getConfig: vi.fn(), addEntries: vi.fn(), updateEntry: vi.fn(), deleteEntry: vi.fn(),
     listFoods: vi.fn(), createFood: vi.fn(), updateFood: vi.fn(), deleteFood: vi.fn(), getGoals: vi.fn(), putGoals: vi.fn(),
-    getAdmin: vi.fn(), putAdmin: vi.fn(), getRange: vi.fn(), searchFoods: vi.fn(), lookupBarcode: vi.fn(), testUsda: vi.fn(), testFatsecret: vi.fn(), getFatsecretFood: vi.fn(), restoreConfig: vi.fn(), matchMicros: vi.fn(), previewMicros: vi.fn(), applyMicros: vi.fn(), getStack: vi.fn(), putStack: vi.fn(), analyze: vi.fn(), setCoachShare: vi.fn(), createHealthToken: vi.fn(), revokeHealthToken: vi.fn(), putHealthSettings: vi.fn(), getHealthToken: vi.fn(), getWeight: vi.fn(), getHealthHistory: vi.fn(), getHealthDebug: vi.fn(), clearHealthDebug: vi.fn()
+    getAdmin: vi.fn(), putAdmin: vi.fn(), searchFoods: vi.fn(), lookupBarcode: vi.fn(), testUsda: vi.fn(), testFatsecret: vi.fn(), getFatsecretFood: vi.fn(), restoreConfig: vi.fn(), matchMicros: vi.fn(), previewMicros: vi.fn(), applyMicros: vi.fn(), getStack: vi.fn(), putStack: vi.fn(), analyze: vi.fn(), setCoachShare: vi.fn(), createHealthToken: vi.fn(), revokeHealthToken: vi.fn(), putHealthSettings: vi.fn(), getWeight: vi.fn(), getHealthHistory: vi.fn(), getHealthDebug: vi.fn(), clearHealthDebug: vi.fn()
   }
 }))
 

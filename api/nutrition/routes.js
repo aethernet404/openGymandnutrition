@@ -10,7 +10,7 @@ import * as store from './store.js';
 import * as v from './validate.js';
 import * as coachCfg from '../coach/config.js';
 import { createLookup, cleanBarcode, describe as describeFailure, LookupError } from './lookup.js';
-import { createFatSecret, createUsage, SERVER_DAILY_CAP, USER_DAILY_CAP } from './fatsecret.js';
+import { createFatSecret, createUsage } from './fatsecret.js';
 import path from 'node:path';
 import * as health from './health.js';
 import * as hae from './hae.js';

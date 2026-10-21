@@ -36,5 +36,3 @@ export const barPct = (v, max) => (v == null || !(max > 0) ? 0 : Math.max(4, Mat
 /** Recent workouts grouped for display: newest first, as given. Never invents calories or distance. */
 export const hasWorkouts = h => Array.isArray(h?.workouts) && h.workouts.length > 0
 
-/** True when a history has nothing at all to chart in this range for this key. */
-export const nothingIn = (days, key, n) => rangeSeries(days, key, n).have === 0

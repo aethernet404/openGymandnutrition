@@ -11,7 +11,6 @@ const send = (method, path, body) => api(path, { method, body: body === undefine
 
 export const getConfig = () => api('/api/nutrition/config')
 export const getDay = date => api('/api/nutrition/day?' + q({ date }))
-export const getRange = (from, to) => api('/api/nutrition/range?' + q({ from, to }))
 export const addEntries = body => send('POST', '/api/nutrition/entries', body)
 export const updateEntry = (date, id, body) => send('PUT', '/api/nutrition/entries?' + q({ date, id }), body)
 export const deleteEntry = (date, id) => send('DELETE', '/api/nutrition/entries?' + q({ date, id }))
@@ -47,7 +46,6 @@ export const testFatsecret = () => send('POST', '/api/admin/nutrition/test-fatse
 export const analyze = body => api('/api/nutrition/analyze', { method: 'POST', body: JSON.stringify(body), timeout: 100000 })
 export const setCoachShare = share => send('PUT', '/api/nutrition/coach-share', { share })
 
-export const getHealthToken = () => api('/api/nutrition/health/token')
 export const createHealthToken = () => send('POST', '/api/nutrition/health/token', {})
 export const revokeHealthToken = () => send('DELETE', '/api/nutrition/health/token')
 export const putHealthSettings = eatBack => send('PUT', '/api/nutrition/health/settings', { eatBack })
