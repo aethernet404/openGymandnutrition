@@ -45,7 +45,7 @@ it but did not run it; **low** = depends on something I could not check (a third
 | 9 | Health debug capture holds example health values in memory for an hour | Opt-in, off by default, memory only, redacted for credentials, admin only. Keep it off unless diagnosing. |
 | 10 | One Claude account serving several profiles | Needs a look at Anthropic's current terms, not a code change. The Coach's one-account rule already limits which profile can use which token. |
 | 11 | New dependency `zxing-wasm`; its licence is unchecked | Used only to read a barcode from a photo. Confirm its licence before any wider distribution. |
-| 12 | Leftovers after a profile is deleted; no automatic backup | The leftover token entry is dead (checked on use) and the counters reset daily. Back up `data/` (see `NUTRITION_OVERVIEW.md`). |
+| 12 | Leftovers after a profile is deleted; no backup inside the app | The leftover token entry is dead (checked on use) and the counters reset daily. Since this review the server copies `data/` nightly at 03:30 to `/home/aether/backups/opengym-test` (see `NUTRITION_OVERVIEW.md`). |
 | 13 | Prompt injection through food or brand names | Bounded as described below: only a candidate id, a confidence and a short reason are read from the model, and nothing is saved before an Accept. |
 
 ---

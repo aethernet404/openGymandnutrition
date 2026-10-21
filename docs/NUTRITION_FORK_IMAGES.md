@@ -53,7 +53,7 @@ Private means the server needs a read-only credential **once**:
 
 1. GitHub → your avatar → **Settings** → **Developer settings** (bottom of the left menu) → **Personal access
    tokens** → **Tokens (classic)** → **Generate new token (classic)**.
-2. Name it `home-server-ghcr-pull`, expiration 90 days (or longer), tick **only `read:packages`**. Generate.
+2. Name it `home-server-ghcr-pull`, pick an expiration (the one in use **expires on January 12, 2027**: renew it before then or pulls fail with an image pull error), tick **only `read:packages`**. Generate.
    Copy the token (`ghp_…`) once; give it to Cascade, never to a chat that logs it or a file in the repo.
 3. Cascade creates a Kubernetes pull secret from it (see below). Nothing else on your server needs a login.
 
@@ -72,3 +72,24 @@ Pull only: snapshot the pods outside `fitness-test`, create the pull secret in `
 the two containers of `opengym-test` to the digest-pinned names from the run summary, wait for the rollout,
 verify, snapshot the other pods again and compare. No `docker build`, no `ctr images import`, no test suite;
 replicas stay 1 and the strategy stays `Recreate`.
+
+## Workflows in this fork (which to keep, which to switch off)
+
+A fork inherits all of upstream's workflows. Only **Build fork images** is yours; the others were written for upstream's
+publishing and mirroring. None of the five upstream ones is needed for deploying this fork.
+
+| Workflow (file) | Fires on | In this fork |
+|---|---|---|
+| **Build fork images** (`build-fork-images.yml`) | push to the work branch (app paths), manual | **Keep.** The only way images are built. |
+| **Tests** (`test.yml`) | pull requests, push to `main` / `coach`, manual | Useful, but it is red until the 10 date-dependent upstream tests are fixed (`NUTRITION_PROPOSALS.md`, item 2). It also builds both images and the Android bits: slow, noisy. Keep or disable. |
+| **Publish Docker images** (`docker-publish.yml`) | push to `main`, a published GitHub Release, manual | **Disable.** On `main` it would publish `edge` (and on a Release `X.Y.Z` / `latest`) images to your ghcr.io as `opengym-api` / `opengym-web`: the web image holds the licensed Gym visual media. |
+| **Mirror to GitLab** (`mirror.yml`) | push to `main`, tags `v*`, manual | **Disable.** It pushes to upstream's GitLab and fails loudly without `GITLAB_MIRROR_TOKEN` (which you do not have and must not add). |
+| **Deploy demo to GitHub Pages** (`pages.yml`) | push to `main`, manual | **Disable** unless you want a public demo of your fork. |
+| **Catalogue** (`catalogue.yml`) | pull requests touching the exercise catalogue, push to `main` | Harmless (checks catalogue files). Disable if it is noise. |
+
+Right now none of the five upstream ones runs on pushes to the work branch (they key on `main` or pull requests), so nothing is failing today. They
+would start the moment something is pushed to `main` or a pull request is opened.
+
+**How to disable one:** repository → **Actions** tab → in the left list click the workflow's name → the **⋯** (three dots) menu at the top right →
+**Disable workflow**. It can be switched on again the same way (**Enable workflow**). Disabling does not change any file. To see what would run
+for a given push, look at the workflow's `on:` section.

@@ -172,7 +172,9 @@ you sent, and the stand-in records (USDA food id and name). **What is never stor
 temporarily on disk), barcodes you scanned (only the number is looked up, not kept), the search words, FatSecret
 or USDA result lists (kept in memory for minutes), and the Health token's secret, FatSecret token and any key in clear text.
 
-**Back up:** copy the whole `data` folder (all of it, **including `secret`**) while the api is idle, or better,
+**Nightly backup (set up on the server):** a job runs every night at **03:30** and copies the data into `/home/aether/backups/opengym-test`. The job itself and the restore steps it came with were written by the operator (Cascade); this repository does not contain them, so keep that text with the backups. In outline, a restore is: scale the `opengym-test` deployment to 0, put the backed-up `data` files back with the same owner and permissions, scale to 1, then check the diary and Goals → Admin. A damaged `config.json` alone can be restored from `config.json.bak` in Goals → Admin.
+
+**Back up by hand:** copy the whole `data` folder (all of it, **including `secret`**) while the api is idle, or better,
 take a snapshot of the volume. Illustrative command (untested here; adjust the names):
 `kubectl -n fitness-test exec deploy/opengym-test -c api -- tar czf - -C /data . > opengym-data-$(date +%F).tgz`.
 Keep the backup private: it holds your health diary and the key that decrypts the stored API keys.
@@ -180,7 +182,7 @@ Keep the backup private: it holds your health diary and the key that decrypts th
 permissions (files 0600, folders 0700), start it. **If `secret` is not restored, the encrypted USDA and FatSecret
 keys and the Coach connection cannot be read: enter them again.** Nutrition data itself is plain JSON and does not
 depend on `secret`. A profile file that cannot be parsed is **left untouched** and the app says it is damaged;
-restore that one file from backup. There is no automatic backup.
+restore that one file from backup. Apart from the nightly copy above there is no other automatic backup.
 
 ## 4. Keys, settings, and what they cost
 
@@ -277,7 +279,7 @@ would corrupt them.
   figures are never converted. The nutrient ids for USDA were not re-checked against its documentation **(unverified)**.
 - **Upper limits** shown are general adult reference values (as of 2026-10), not personal or medical advice.
 - **Open Food Facts** data is volunteer-entered and often incomplete; its search can take 3 to 8 seconds.
-- **Single replica**, no automatic backups, one JSON file per profile rewritten whole on each change.
+- **Single replica**, one JSON file per profile rewritten whole on each change.
 - **Limits per profile** (so one client cannot grow its file without end): 3,660 days, 50,000 entries, 15 MB, and 120 changes a minute. A change that would pass a limit is refused with a plain message and nothing is written.
 - **Server date is UTC:** the AI allowance, FatSecret budget and "today" for the Health token reset at midnight UTC.
 - **The Apple Health route** accepts days from 60 days ago to tomorrow only.
@@ -316,7 +318,7 @@ would corrupt them.
 | Coach summary | `coach-summary.js` |
 | Screens | `frontend/src/nutrition/` (`Diary.jsx`, `sheets.jsx`, `AiLog.jsx`, `FillMicros.jsx`, `MicrosCard.jsx`, `Goals.jsx`, `Foods.jsx`, `Supplements.jsx`, `AppleHealth.jsx`, …) |
 | Tests | `api/test/nutrition-*.test.js`; the app's tests sit beside the code in `frontend/src/nutrition/` |
-| Guides | `docs/NUTRITION_*.md` and `api/nutrition/README.md` (the route table) |
+| Guides | `docs/NUTRITION_*.md` and `api/nutrition/README.md` (the route table); `NUTRITION_PROPOSALS.md` (ideas not yet applied: image retention, test-date fix, moving to `main`); `NUTRITION_FORK_IMAGES.md` also lists which GitHub workflows to keep or disable |
 
 Run the tests: `cd api && npm test` and `cd frontend && npm test`. Ten api tests that depend on the calendar date fail on
 a pristine upstream checkout too ("date rot"); they pass with the clock set to 2026-10-12.

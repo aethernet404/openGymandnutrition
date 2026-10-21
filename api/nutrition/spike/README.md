@@ -1,4 +1,4 @@
-# Photo spike (throwaway)
+# Photo spike (a diagnostic; the app does not use it)
 
 Needs the **coach** image target (`API_TARGET=coach`), the Coach set to *Claude* in Admin → Coach,
 and the setup token connected. Uses the Coach's own credential; writes nothing under `/data`.
