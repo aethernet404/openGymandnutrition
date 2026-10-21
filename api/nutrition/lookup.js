@@ -139,7 +139,7 @@ const valueOf = (list, ids) => {
 };
 const titleCase = s => (s === s.toUpperCase() && /[A-Z]{3}/.test(s) ? s.toLowerCase().replace(/(^|[\s(,/-])([a-z])/g, (_, a, b) => a + b.toUpperCase()) : s);
 export const USDA_DATATYPES = ['Foundation', 'SR Legacy', 'Survey (FNDDS)', 'Branded'];
-const USDA_KIND = { 'foundation': 'foundation', 'sr legacy': 'sr', 'branded': 'branded' };
+const USDA_KIND = { 'foundation': 'foundation', 'sr legacy': 'sr', 'survey (fndds)': 'survey', 'branded': 'branded' };
 
 export function normaliseUsda(f) {
   if (!f || typeof f !== 'object' || f.fdcId == null) return null;
@@ -284,14 +284,16 @@ export function createLookup({
     const url = types => `${USDA_BASE()}/foods/search?` + new URLSearchParams({ api_key: apiKey, query: q, pageSize: '25', dataType: types });
     // Two requests, so that the plain reference foods are never crowded out by the thousands of
     // branded labels: the reference foods are asked for on their own.
-    const [generic, branded] = await Promise.allSettled([
+    // Survey (FNDDS) — the mixed dishes (burritos, taquitos, pizza) — is a third request, ranked after the reference foods.
+    const [generic, branded, survey] = await Promise.allSettled([
       fetchRetry(url('Foundation,SR Legacy'), deadline),
-      fetchRetry(url('Branded'), deadline)
+      fetchRetry(url('Branded'), deadline),
+      fetchRetry(url('Survey (FNDDS)'), deadline)
     ]);
-    if (generic.status === 'rejected' && branded.status === 'rejected') throw generic.reason;
+    if ([generic, branded, survey].every(r => r.status === 'rejected')) throw generic.reason;
     const take = r => (r.status === 'fulfilled' ? listOf('USDA FoodData Central', 'search', r.value, 'foods').map(normaliseUsda).filter(Boolean) : []);
     // A failure of only one of the two is shown as what it is: results from the other.
-    return remember(key, rankHits([...take(generic), ...take(branded)], q).slice(0, MAX_RESULTS), SEARCH_TTL);
+    return remember(key, rankHits([...take(generic), ...take(survey), ...take(branded)], q).slice(0, MAX_RESULTS), SEARCH_TTL);
   }
 
   async function searchFatSecret(q, creds, uid) {

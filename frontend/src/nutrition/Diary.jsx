@@ -11,7 +11,7 @@ import { openAddSheet, openEditEntry, openSaveFood } from './sheets.jsx'
 import MicrosCard from './MicrosCard.jsx'
 import { openSupplementSheet } from './Supplements.jsx'
 import { useStore } from '../store/useStore.js'
-import { EMPTY_TOTALS, MACRO_KEYS, foodFromEntry, MACRO_LABEL, MEALS, MEAL_LABEL, burnedOf, fraction, goalWithEatBack, macroLine, mealForHour, netOf, relativeDay, remaining, shiftISO, signed, sparkPath, trim, updatedText, validISO, weightText, weightTrend, workoutLine } from './diary.js'
+import { EMPTY_TOTALS, MACRO_KEYS, foodFromEntry, hasMacros, macroShares, mealBreakdown, MACRO_LABEL, MEALS, MEAL_LABEL, burnedOf, fraction, goalWithEatBack, macroLine, mealForHour, netOf, relativeDay, remaining, shiftISO, signed, sparkPath, trim, updatedText, validISO, weightText, weightTrend, workoutLine } from './diary.js'
 import './nutrition.css'
 
 const nf = n => Math.round(n || 0).toLocaleString(dateLocale())
@@ -105,13 +105,44 @@ function WeightCard({ weight, unit, onSetup }) {
   </div>
 }
 
+// The macros of one meal, shown on request. Shares are of the meal's calories; the bar is the same proportion.
+function MealMacros({ id, totals }) {
+  const sh = macroShares(totals)
+  return <div id={id} className="nut-mm">
+    <div className="nut-mm-grid">
+      <div className="nut-mm-cell"><span className="muted small">{nt('Calories')}</span><b>{nf(totals.calories)} kcal</b></div>
+      {MACRO_KEYS.filter(k => k !== 'calories').map(k => <div key={k} className="nut-mm-cell">
+        <span className="muted small">{nt(MACRO_LABEL[k])}</span>
+        <b>{trim(totals[k])} g</b>
+        <span className="muted small">{sh.pct[k] == null ? '–' : sh.pct[k] + '%'}</span>
+      </div>)}
+    </div>
+    {sh.bar.length > 0 && <div className="nut-mm-bar" role="img" aria-label={nt('Share of calories: protein {0}%, carbs {1}%, fat {2}%', sh.pct.protein_g, sh.pct.carbs_g, sh.pct.fat_g)}>
+      {sh.bar.map(b => <i key={b.key} className={'m-' + b.key} style={{ width: b.width + '%' }} />)}
+    </div>}
+    {sh.partial && <div className="dim small nut-mm-note">{nt('Some entries have calories without all their macros, so the shares add up to less than 100%.')}</div>}
+  </div>
+}
+
 function MealCard({ meal, entries, totals, onAdd, onEdit }) {
   const supplements = meal === 'supplements'
+  const [open, setOpen] = useState(false)          // hidden every time the diary opens
+  // Supplements have macros only if some were entered; an empty meal has nothing to show.
+  const canShow = entries.length > 0 && (!supplements || hasMacros(totals))
+  const id = 'nut-mm-' + meal
   return <div className="card nut-meal">
     <div className="row between nut-meal-h">
-      <div><h2>{nt(MEAL_LABEL[meal])}</h2>{entries.length > 0 && (!supplements || totals.calories > 0) && <span className="muted small">{nf(totals.calories)} kcal</span>}</div>
+      <div className="nut-meal-t"><h2>{nt(MEAL_LABEL[meal])}</h2>
+        <div className="nut-meal-sub">
+          {entries.length > 0 && (!supplements || totals.calories > 0) && <span className="muted small">{nf(totals.calories)} kcal</span>}
+          {canShow && <button type="button" className="nut-mm-btn" aria-expanded={open} aria-controls={id} onClick={() => setOpen(o => !o)}>
+            <span>{nt('Macros')}</span><Icon name={open ? 'chevronUp' : 'chevronDown'} />
+          </button>}
+        </div>
+      </div>
       <Button size="sm" icon="plus" onClick={onAdd} aria-label={nt('Add to {0}', nt(MEAL_LABEL[meal]).toLowerCase())}>{nt('Add')}</Button>
     </div>
+    {canShow && open && <MealMacros id={id} totals={totals} />}
     {entries.length === 0 ? <div className="dim small nut-none">{nt('Nothing logged')}</div> : <div className="nut-entries">
       {entries.map(e => <div key={e.id} className="nut-entry tap" {...tappable(() => onEdit(e))}>
         <div className="nut-entry-m">
@@ -158,6 +189,9 @@ export default function Diary() {
 
   const { day, status } = state
   const byMeal = m => (day?.entries || []).filter(e => e.meal === m)
+  // The meals' macros are rounded so that they add up to the day's totals shown above.
+  const split = day ? mealBreakdown(day.entries || [], day.totals) : {}
+  const totalsOf = m => (byMeal(m).length ? split[m] : day.byMeal?.[m]) || EMPTY_TOTALS
   const defaultMeal = mealForHour(new Date().getHours())
 
   return <div className="narrow nut">
@@ -200,10 +234,10 @@ export default function Diary() {
         <button className="linkbtn" onClick={() => openSaveFood({ initial: foodFromEntry(p), onSaved: () => dismiss(p.id) })}>{nt('Save as food')}</button>
         <button className="iconbtn" onClick={() => dismiss(p.id)} aria-label={nt('Dismiss')}><Icon name="xmark" /></button>
       </div>)}
-      {MEALS.map(m => <MealCard key={m} meal={m} entries={byMeal(m)} totals={day.byMeal?.[m] || EMPTY_TOTALS}
+      {MEALS.map(m => <MealCard key={m} meal={m} entries={byMeal(m)} totals={totalsOf(m)}
         onAdd={() => openAddSheet({ date, meal: m, onSaved: afterAdd })}
         onEdit={e => openEditEntry({ entry: e, date, onSaved: load })} />)}
-      <MealCard meal="supplements" entries={byMeal('supplements')} totals={day.byMeal?.supplements || EMPTY_TOTALS}
+      <MealCard meal="supplements" entries={byMeal('supplements')} totals={totalsOf('supplements')}
         onAdd={() => openSupplementSheet({ date, onSaved: load })}
         onEdit={e => openEditEntry({ entry: e, date, onSaved: load })} />
       {!day.entries.length && <div className="nut-center muted small" style={{ margin: '6px 0 14px' }}>

@@ -59,6 +59,16 @@ describe('nutrition layout survives narrow screens and large text', () => {
     for (const sel of ['.nut-fill-actions', '.nut-fill-amounts li', '.nut-fill-cand', '.nut-fill-boxbtns', '.nut-est-switch']) expect(rule(sel), sel).toMatch(/flex-wrap:wrap/)
     expect(rule('.nut-fill-amounts')).toMatch(/minmax\(0,\s*1fr\)/)
   })
+  it('the per-meal Macros button is a 44 px target; its panel and grid shrink and wrap; no animation, no global classes', () => {
+    expect(rule('.nut-mm-btn')).toMatch(/min-height:44px/)
+    expect(rule('.nut-mm-btn')).toMatch(/min-width:44px/)
+    expect(rule('.nut-meal-sub')).toMatch(/flex-wrap:wrap/)
+    for (const sel of ['.nut-meal-t', '.nut-meal-sub', '.nut-mm', '.nut-mm-grid', '.nut-mm-cell', '.nut-mm-bar']) expect(rule(sel), sel).toMatch(/min-width:0/)
+    for (const sel of ['.nut-mm-cell', '.nut-mm-note']) expect(rule(sel), sel).toMatch(/overflow-wrap:anywhere/)
+    expect(rule('.nut-mm-grid')).toMatch(/minmax\(0,\s*1fr\)/)
+    for (const sel of ['.nut-mm-btn', '.nut-mm', '.nut-mm-bar', '.nut-mm-bar>i']) expect(rule(sel), sel).not.toMatch(/transition|animation/)
+    expect(rule('.nut-mm-bar')).not.toMatch(/(^|;)\s*width:/)
+  })
   it('the Micronutrients card and the More nutrients form section shrink and wrap; the bar never sets a width in CSS', () => {
     for (const sel of ['.nut-micros', '.nut-micros-b', '.nut-mgroup', '.nut-mrow', '.nut-more', '.nut-more-b']) expect(rule(sel), sel).toMatch(/min-width:0/)
     for (const sel of ['.nut-micros-h>span', '.nut-mrow-t>span', '.nut-cov', '.nut-munk', '.nut-mnote', '.nut-ul-notes', '.nut-more-note']) expect(rule(sel), sel).toMatch(/overflow-wrap:anywhere/)

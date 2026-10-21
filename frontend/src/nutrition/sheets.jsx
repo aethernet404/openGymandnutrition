@@ -259,7 +259,7 @@ function HitRow({ hit, onPick }) {
   const b = defaultBase(hit)
   return <button className="nut-pick" onClick={() => onPick(hit)}>
     <span className="nut-pick-m"><span className="nut-pick-t">{hit.name}</span><span className="nut-pick-s">{hitLine(hit)} · {macroLine(b.per)}</span></span>
-    <span className="nut-pick-r"><span className="nut-kcal">{b.per.calories}</span><span className="tag nut-src">{nt(SOURCE_SHORT[hit.source])}</span>{hit.origin === 'ai' && <span className="tag nut-src">{nt('AI estimate')}</span>}</span>
+    <span className="nut-pick-r"><span className="nut-kcal">{b.per.calories}</span><span className="tag nut-src">{nt(SOURCE_SHORT[hit.source])}</span>{hit.kind === 'survey' && <span className="tag nut-src">{nt('Mixed dish')}</span>}{hit.origin === 'ai' && <span className="tag nut-src">{nt('AI estimate')}</span>}</span>
   </button>
 }
 

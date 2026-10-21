@@ -156,8 +156,9 @@ fill the gaps **without inventing a number**:
    of that entry's candidates counts as "no match". The server then fetches that food from USDA and maps its nutrients to our
    29 with the same conversions as everywhere else (including micro-sign µg units).
 3. **What USDA data types are searched** for the candidates: **Foundation, SR Legacy and Survey (FNDDS)** (mixed dishes such as
-   taquitos and burritos live in FNDDS), plus **Branded** only when the entry has a brand. The ordinary food search in the add
-   screen is unchanged: Foundation + SR Legacy in one request and Branded in another, **not** Survey (FNDDS).
+   taquitos and burritos live in FNDDS), plus **Branded** only when the entry has a brand. The ordinary Add → Search box now asks
+   Foundation + SR Legacy, Survey (FNDDS) and Branded as three requests; mixed dishes are labelled "Mixed dish" and rank after
+   the Foundation and SR Legacy foods.
 4. **Scaling:** the stand-in's per-100 g amounts are scaled by the entry's own grams; with no grams, the weight is worked out
    from calories (entry kcal ÷ the stand-in's kcal per 100 g). The stand-in's calories and macros at that weight are compared
    with the entry's (gap thresholds: calories 50 kcal and 25 %, protein 5 g and 40 %, carbs 8 g and 40 %, fat 4 g and 40 %,

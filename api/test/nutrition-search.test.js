@@ -147,7 +147,7 @@ test('a rate limit or a rejected key is not retried: asking again only makes the
     let n = 0;
     const { lk } = service(() => { n++; return res('', status); });
     const r = await lk.search('banana', { usdaKey: 'KEY12345', sources: 'usda' });
-    assert.equal(n, 2, 'USDA is asked twice (reference + branded), once each');
+    assert.equal(n, 3, 'USDA is asked three times (reference, branded, mixed dishes), once each');
     assert.equal(r.sources.usda.kind, kind);
   }
   let n = 0;
@@ -255,4 +255,21 @@ test('serving sizes shown are believable', () => {
   assert.deepEqual(normaliseOff(off('5', 'Oats', 'X', { kcal: 380 })).bases.map(b => b.label), ['100 g']);
   // Ounces are read as grams.
   assert.equal(normaliseOff(off('6', 'Chips', 'X', { kcal: 540 }, { serving_size: '1 oz (28g)' })).bases[0].grams, 28);
+});
+
+test('USDA Survey (FNDDS) mixed dishes are searched too, labelled kind "survey", and rank after Foundation / SR Legacy foods', async () => {
+  const types = [];
+  const { lk } = service(url => {
+    const t = new URL(url).searchParams.get('dataType'); types.push(t);
+    if (t === 'Survey (FNDDS)') return res({ foods: [fdc(3, 'Burrito, beef and bean', 'Survey (FNDDS)', 210)] });
+    if (t === 'Branded') return res({ foods: [] });
+    return res({ foods: [fdc(1, 'Beans, refried burrito filling', 'SR Legacy', 90)] });
+  });
+  const r = await lk.search('burrito', { usdaKey: 'KEY12345', sources: 'usda' });
+  assert.deepEqual(types.sort(), ['Branded', 'Foundation,SR Legacy', 'Survey (FNDDS)']);
+  assert.deepEqual(r.results.map(h => [h.name, h.kind]), [['Beans, refried burrito filling', 'sr'], ['Burrito, beef and bean', 'survey']]);
+  assert.ok(r.results[0].rank >= 2000 && r.results[1].rank >= 1500 && r.results[1].rank < 2000);
+  // One of the three failing still gives the others' results.
+  const f = service(url => (new URL(url).searchParams.get('dataType') === 'Survey (FNDDS)' ? res('', 503) : res({ foods: [fdc(1, 'Burrito shell', 'SR Legacy', 300)] })));
+  assert.equal((await f.lk.search('burrito', { usdaKey: 'KEY12345', sources: 'usda' })).results.length, 1);
 });

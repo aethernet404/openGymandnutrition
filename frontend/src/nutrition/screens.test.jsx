@@ -2166,6 +2166,104 @@ describe('Micronutrients card', () => {
   })
 })
 
+describe('Macros of a meal, on request', () => {
+  const E = (id, meal, name, calories, protein_g, carbs_g, fat_g, source = 'quick') => ({ id, meal, name, source, calories, protein_g, carbs_g, fat_g, qty: 1 })
+  const ENTRIES = [E('a', 'breakfast', 'Oats', 400, 25, 50, 11.1), E('b', 'breakfast', 'Banana', 100, 1, 25, 0.3), E('c', 'lunch', 'Chicken wrap', 650, 40, 60, 20, 'ai'), E('d', 'snack', 'Mystery bar', 300, 0, 0, 0)]
+  const dayWith = (entries, extra = {}) => {
+    const t = { calories: 0, protein_g: 0, carbs_g: 0, fat_g: 0 }
+    for (const e of entries) for (const k of Object.keys(t)) t[k] += e[k]
+    return dayOf({ entries, totals: { calories: Math.round(t.calories), protein_g: Math.round(t.protein_g * 10) / 10, carbs_g: Math.round(t.carbs_g * 10) / 10, fat_g: Math.round(t.fat_g * 10) / 10 }, ...extra })
+  }
+  const meal = name => [...host.querySelectorAll('.nut-meal')].find(c => c.querySelector('h2').textContent === name)
+  const btn = name => meal(name).querySelector('.nut-mm-btn')
+
+  it('is hidden by default: a real button with aria-expanded=false next to the calorie total; tap reveals, tap again hides', async () => {
+    m.api.getDay.mockResolvedValue(dayWith(ENTRIES))
+    await mount(<Diary />)
+    const b = btn('Breakfast')
+    expect(b.tagName).toBe('BUTTON'); expect(b.getAttribute('type')).toBe('button')
+    expect(b.getAttribute('aria-expanded')).toBe('false')
+    expect(b.textContent).toBe('Macros')
+    expect(b.parentElement.textContent).toContain('500 kcal')                    // beside the meal's calorie total
+    expect(meal('Breakfast').querySelector('.nut-mm')).toBeNull()
+    await click(b)
+    expect(b.getAttribute('aria-expanded')).toBe('true')
+    expect(b.getAttribute('aria-controls')).toBe(meal('Breakfast').querySelector('.nut-mm').id)
+    expect(meal('Lunch').querySelector('.nut-mm')).toBeNull()                    // only the tapped meal
+    await click(b)
+    expect(b.getAttribute('aria-expanded')).toBe('false')
+    expect(meal('Breakfast').querySelector('.nut-mm')).toBeNull()
+  })
+
+  it('starts hidden again every time the diary opens (nothing is remembered)', async () => {
+    m.api.getDay.mockResolvedValue(dayWith(ENTRIES))
+    await mount(<Diary />)
+    await click(btn('Breakfast'))
+    act(() => root.unmount()); root = createRoot(host)
+    await mount(<Diary />)
+    expect(btn('Breakfast').getAttribute('aria-expanded')).toBe('false')
+  })
+
+  it('shows calories, protein, carbs and fat in grams and each one’s share of the meal’s calories, and a proportion bar', async () => {
+    m.api.getDay.mockResolvedValue(dayWith(ENTRIES))
+    await mount(<Diary />)
+    await click(btn('Breakfast'))
+    const t = meal('Breakfast').querySelector('.nut-mm').textContent
+    expect(t).toContain('500 kcal'); expect(t).toContain('26 g'); expect(t).toContain('75 g'); expect(t).toContain('11.4 g')
+    // 26 g protein = 104 kcal of 500 = 21 %; carbs 300 = 60 %; fat 102.6 = 21 %
+    expect(t).toContain('21%'); expect(t).toContain('60%')
+    const bar = meal('Breakfast').querySelector('.nut-mm-bar')
+    expect(bar.getAttribute('role')).toBe('img'); expect(bar.getAttribute('aria-label')).toContain('protein 21%')
+    expect(bar.querySelectorAll('i')).toHaveLength(3)
+    expect(meal('Breakfast').querySelector('.nut-mm .nut-mm-note')).toBeNull()
+  })
+
+  it('Quick add and AI entries count like any other entry', async () => {
+    m.api.getDay.mockResolvedValue(dayWith(ENTRIES))
+    await mount(<Diary />)
+    await click(btn('Lunch'))
+    expect(meal('Lunch').querySelector('.nut-mm').textContent).toContain('650 kcal')
+    expect(meal('Lunch').querySelector('.nut-mm').textContent).toContain('40 g')
+  })
+
+  it('an empty meal has no button; entries with calories but no macros say the shares do not reach 100%', async () => {
+    m.api.getDay.mockResolvedValue(dayWith(ENTRIES))
+    await mount(<Diary />)
+    expect(btn('Dinner')).toBeNull()
+    await click(btn('Snacks'))
+    const mm = meal('Snacks').querySelector('.nut-mm')
+    expect(mm.textContent).toContain('300 kcal'); expect(mm.textContent).toContain('0%')
+    expect(mm.querySelector('.nut-mm-note').textContent).toContain('add up to less than 100%')
+  })
+
+  it('the meals’ macros add up to the day’s totals, rounding included', async () => {
+    const es = [E('a', 'breakfast', 'A', 0.5, 0.04, 0.04, 0.04), E('b', 'lunch', 'B', 0.5, 0.04, 0.04, 0.04), E('c', 'dinner', 'C', 0.5, 0.04, 0.04, 0.04), E('d', 'snack', 'D', 100.4, 3.33, 10.33, 4.33)]
+    m.api.getDay.mockResolvedValue(dayWith(es))
+    await mount(<Diary />)
+    for (const n of ['Breakfast', 'Lunch', 'Dinner', 'Snacks']) await click(btn(n))
+    const num = (name, label) => { const cell = [...meal(name).querySelectorAll('.nut-mm-cell')].find(c => c.textContent.startsWith(label)); return parseFloat(cell.querySelector('b').textContent) }
+    const day = dayWith(es).totals
+    for (const [label, k] of [['Calories', 'calories'], ['Protein', 'protein_g'], ['Carbs', 'carbs_g'], ['Fat', 'fat_g']]) {
+      const total = ['Breakfast', 'Lunch', 'Dinner', 'Snacks'].reduce((a, n) => a + num(n, label), 0)
+      expect(Math.round(total * 10) / 10, label).toBe(day[k])
+    }
+    // The calorie figure beside each meal is the same number the panel shows.
+    for (const n of ['Breakfast', 'Lunch', 'Dinner', 'Snacks']) expect(meal(n).querySelector('.nut-meal-sub').textContent).toContain(String(num(n, 'Calories')))
+  })
+
+  it('Vitamins & supplements: no button without calories or macros; with them, the button appears', async () => {
+    const sup = { id: 's', meal: 'supplements', name: 'Vitamin D', source: 'manual', calories: 0, protein_g: 0, carbs_g: 0, fat_g: 0, qty: 1 }
+    m.api.getDay.mockResolvedValue(dayWith([...ENTRIES, sup]))
+    await mount(<Diary />)
+    expect(btn('Vitamins & supplements')).toBeNull()
+    act(() => root.unmount()); root = createRoot(host)
+    m.api.getDay.mockResolvedValue(dayWith([...ENTRIES, { ...sup, calories: 10, carbs_g: 2 }]))
+    await mount(<Diary />)
+    await click(btn('Vitamins & supplements'))
+    expect(meal('Vitamins & supplements').querySelector('.nut-mm').textContent).toContain('10 kcal')
+  })
+})
+
 describe('Estimated micronutrients on the card', () => {
   const card = () => host.querySelector('.nut-micros')
   const open = async () => click(card().querySelector('.nut-micros-h'))

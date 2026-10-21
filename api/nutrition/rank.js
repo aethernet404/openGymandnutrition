@@ -97,6 +97,7 @@ export function rankHits(hits, query) {
     seen.add(key)
     let rank
     if (hit.source === 'usda' && GENERIC_USDA.has(hit.kind)) rank = 2000 + r.score + (hit.kind === 'foundation' ? 4 : 0)
+    else if (hit.source === 'usda' && hit.kind === 'survey') rank = 1500 + r.score          // a mixed dish: after the reference foods, before the rest
     else {
       rank = 1000 + r.score
       if (hit.source === 'usda') rank += 10                      // a USDA branded label is checked data

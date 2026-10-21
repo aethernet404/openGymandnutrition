@@ -265,3 +265,19 @@
 .nut-est-switch{gap:10px;margin:8px 2px;flex-wrap:wrap;min-width:0}
 .nut-est-switch>span{min-width:0;overflow-wrap:anywhere}
 .nut-est-mark{color:var(--label-2);font-weight:400}
+
+/* Macros of a meal, on request */
+.nut-meal-t{min-width:0}
+.nut-meal-sub{display:flex;flex-wrap:wrap;align-items:center;gap:0 10px;min-width:0}
+.nut-mm-btn{display:inline-flex;align-items:center;gap:4px;min-height:44px;min-width:44px;padding:0 4px;color:var(--acc);font-size:15px;background:transparent;border:0}
+.nut-mm-btn>span{min-width:0;overflow-wrap:anywhere}
+.nut-mm{margin:2px 0 10px;padding:10px 12px;border-radius:12px;background:var(--surface-2);min-width:0}
+.nut-mm-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 12px;min-width:0}
+.nut-mm-cell{display:flex;flex-direction:column;min-width:0;overflow-wrap:anywhere}
+.nut-mm-cell b{font-size:16px}
+.nut-mm-bar{display:flex;height:6px;border-radius:99px;background:var(--surface-3);overflow:hidden;margin-top:12px;min-width:0}
+.nut-mm-bar>i{display:block;height:100%}
+.nut-mm-bar>i.m-protein_g{background:var(--m-protein)}
+.nut-mm-bar>i.m-carbs_g{background:var(--m-carbs)}
+.nut-mm-bar>i.m-fat_g{background:var(--m-fat)}
+.nut-mm-note{margin:8px 0 0;overflow-wrap:anywhere}

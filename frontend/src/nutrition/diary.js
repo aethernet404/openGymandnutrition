@@ -293,3 +293,65 @@ export function savedOverrides(over, eff, next) {
   for (const k of ['name', 'brand', 'serving', 'grams', 'calories', 'protein_g', 'carbs_g', 'fat_g']) if (next[k] !== eff[k]) out[k] = next[k]
   return out
 }
+
+/* ---------- per-meal macros that add up to the day ---------- */
+
+/**
+ * Round each part to a multiple of `step` so that the rounded parts add up to `target` exactly (largest remainder:
+ * the units left over after rounding down go to the parts with the biggest fractional parts). `target` is the day's
+ * total, already rounded the way the server rounds it. When the parts do not really add up to the target (a day that
+ * changed under us, a mocked answer) each part is simply rounded on its own.
+ */
+export function splitToTotal(parts, target, step) {
+  const q = 1e6
+  const units = parts.map(p => Math.round((p / step) * q) / q)
+  const own = units.map(u => Math.round(u))
+  const goal = Math.round(target / step)
+  if (Math.abs(units.reduce((a, b) => a + b, 0) - goal) > 0.5 + 1e-6) return own.map(u => Math.round(u * step * 1e6) / 1e6)
+  const floors = units.map(Math.floor)
+  let left = goal - floors.reduce((a, b) => a + b, 0)
+  const order = units.map((u, i) => [u - floors[i], i]).sort((a, b) => b[0] - a[0] || a[1] - b[1])
+  const out = [...floors]
+  for (const [, i] of order) { if (left <= 0) break; out[i]++; left-- }
+  return out.map(u => Math.round(u * step * 1e6) / 1e6)
+}
+
+/**
+ * { breakfast, lunch, dinner, snack, supplements } → { calories, protein_g, carbs_g, fat_g }, summed from the entries and
+ * rounded so that the meals add up to the day's totals (calories to whole numbers, grams to 0.1).
+ */
+export function mealBreakdown(entries, totals, meals = [...MEALS, 'supplements']) {
+  const out = {}
+  const sums = meals.map(m => { const t = { calories: 0, protein_g: 0, carbs_g: 0, fat_g: 0 }; for (const e of entries.filter(x => x.meal === m)) for (const k of Object.keys(t)) t[k] += e[k] || 0; return t })
+  const stray = Object.fromEntries(Object.keys(sums[0] || {}).map(k => [k, entries.filter(e => !meals.includes(e.meal)).reduce((a, e) => a + (e[k] || 0), 0)]))
+  for (const k of ['calories', 'protein_g', 'carbs_g', 'fat_g']) {
+    const step = k === 'calories' ? 1 : 0.1
+    // An entry of an unknown meal still counts in the day; it is a part of its own so the rest adds up.
+    const parts = [...sums.map(s => s[k]), stray[k] || 0]
+    const split = splitToTotal(parts, totals?.[k] ?? parts.reduce((a, b) => a + b, 0), step)
+    meals.forEach((m, i) => { (out[m] ||= {})[k] = split[i] })
+  }
+  return out
+}
+
+const KCAL_PER_G = { protein_g: 4, carbs_g: 4, fat_g: 9 }
+/**
+ * Each macro's share of the meal's calories (whole percent) and the proportion bar's segments. Shares are of the calories
+ * the meal states; when entries have calories but not all of their macros the three do not reach 100 %, and `partial`
+ * says so rather than pretending. No calories → no shares.
+ */
+export function macroShares(m) {
+  const cal = m?.calories || 0
+  const kcal = Object.fromEntries(Object.entries(KCAL_PER_G).map(([k, f]) => [k, (m?.[k] || 0) * f]))
+  const used = kcal.protein_g + kcal.carbs_g + kcal.fat_g
+  if (!(cal > 0)) return { pct: { protein_g: null, carbs_g: null, fat_g: null }, bar: [], partial: false }
+  const whole = Math.max(cal, used)                         // a bar never overflows when macros imply more than the stated calories
+  return {
+    pct: Object.fromEntries(Object.keys(kcal).map(k => [k, Math.round(kcal[k] / cal * 100)])),
+    bar: Object.keys(kcal).map(k => ({ key: k, width: kcal[k] / whole * 100 })),
+    partial: used < cal * 0.85
+  }
+}
+
+/** Is there anything to show for the supplements section's macros (calories or macros entered)? */
+export const hasMacros = t => !!t && (t.calories > 0 || t.protein_g > 0 || t.carbs_g > 0 || t.fat_g > 0)

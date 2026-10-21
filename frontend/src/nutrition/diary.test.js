@@ -97,7 +97,7 @@ describe('forms', () => {
   })
 })
 
-import { burnedOf, netOf, goalWithEatBack, signed, updatedText } from './diary.js'
+import { burnedOf, netOf, goalWithEatBack, signed, updatedText, hasMacros, macroShares, mealBreakdown, splitToTotal } from './diary.js'
 
 describe('Apple Health numbers', () => {
   const h = { active_kcal: 640.4, resting_kcal: 1670, steps: 8000, updatedAt: 1 }
@@ -264,5 +264,55 @@ describe('saving an estimate or an entry as a food', () => {
     expect(over).toEqual({ name: 'Pliny', calories: 210 })
     expect(savedFields({ ...row, calories: 999, name: 'Changed' }, over)).toMatchObject({ name: 'Pliny', calories: 210, serving: '2 large', protein_g: 12.5 })
     expect(savedFields({ ...row, grams: 120 }, savedOverrides({}, eff, { ...eff, grams: null })).grams).toBeNull()      // clearing the weight is an edit too
+  })
+})
+
+describe('per-meal macros add up to the day', () => {
+  const E = (meal, calories, protein_g, carbs_g, fat_g) => ({ meal, calories, protein_g, carbs_g, fat_g })
+  const day = es => { const t = { calories: 0, protein_g: 0, carbs_g: 0, fat_g: 0 }; for (const e of es) for (const k of Object.keys(t)) t[k] += e[k] || 0; return { calories: Math.round(t.calories), protein_g: Math.round(t.protein_g * 10) / 10, carbs_g: Math.round(t.carbs_g * 10) / 10, fat_g: Math.round(t.fat_g * 10) / 10 } }
+  const sum = (b, k) => Math.round(Object.values(b).reduce((a, m) => a + m[k], 0) * 10) / 10
+
+  it('three meals of 0.5 kcal each: independent rounding would give 2 or 0, the split gives exactly the day total', () => {
+    const es = [E('breakfast', 0.5, 0.04, 0.04, 0.04), E('lunch', 0.5, 0.04, 0.04, 0.04), E('dinner', 0.5, 0.04, 0.04, 0.04)]
+    const t = day(es)
+    const b = mealBreakdown(es, t)
+    for (const k of ['calories', 'protein_g', 'carbs_g', 'fat_g']) expect(sum(b, k), k).toBe(t[k])
+  })
+  it('real-looking days: every macro of the meals sums to the totals the server sends', () => {
+    const es = [E('breakfast', 312.4, 10.26, 50.31, 5.55), E('breakfast', 95.5, 0.33, 22.04, 0.25), E('lunch', 650, 40.05, 60.95, 20.15), E('snack', 187.3, 7.14, 20.07, 9.02), E('dinner', 0, 0, 0, 0), E('supplements', 5, 0, 1.25, 0)]
+    const t = day(es)
+    const b = mealBreakdown(es, t)
+    for (const k of ['calories', 'protein_g', 'carbs_g', 'fat_g']) expect(sum(b, k), k).toBe(t[k])
+    expect(Math.abs(b.lunch.calories - 650)).toBeLessThanOrEqual(1)
+    expect(b.dinner).toEqual({ calories: 0, protein_g: 0, carbs_g: 0, fat_g: 0 })
+  })
+  it('an entry of an unknown meal still counts in the day, so the others are not stretched to cover it', () => {
+    const es = [E('breakfast', 100, 5, 10, 2), E('brunch', 50, 1, 5, 1)]
+    const b = mealBreakdown(es, day(es))
+    expect(b.breakfast).toEqual({ calories: 100, protein_g: 5, carbs_g: 10, fat_g: 2 })
+  })
+  it('when the parts do not match the target at all, each is rounded on its own (no invented numbers)', () => {
+    expect(splitToTotal([10.4, 20.6], 99, 1)).toEqual([10, 21])
+    expect(splitToTotal([1.04, 2.06], 3.1, 0.1)).toEqual([1, 2.1])
+  })
+  it('shares of the meal’s calories; protein and carbs 4 kcal/g, fat 9', () => {
+    const s = macroShares({ calories: 400, protein_g: 25, carbs_g: 50, fat_g: 11.1 })
+    expect(s.pct).toEqual({ protein_g: 25, carbs_g: 50, fat_g: 25 })
+    expect(s.bar.map(b => Math.round(b.width))).toEqual([25, 50, 25])
+    expect(s.partial).toBe(false)
+  })
+  it('calories without macros: shares are 0 and the meal is flagged as partial; no calories: no shares at all', () => {
+    expect(macroShares({ calories: 300, protein_g: 0, carbs_g: 0, fat_g: 0 })).toMatchObject({ pct: { protein_g: 0, carbs_g: 0, fat_g: 0 }, partial: true })
+    expect(macroShares({ calories: 300, protein_g: 10, carbs_g: 0, fat_g: 0 }).partial).toBe(true)
+    expect(macroShares({ calories: 0, protein_g: 5, carbs_g: 5, fat_g: 5 })).toEqual({ pct: { protein_g: null, carbs_g: null, fat_g: null }, bar: [], partial: false })
+  })
+  it('the bar never overflows when the macros imply more than the stated calories', () => {
+    const s = macroShares({ calories: 100, protein_g: 20, carbs_g: 20, fat_g: 20 })
+    expect(s.bar.reduce((a, b) => a + b.width, 0)).toBeCloseTo(100, 5)
+  })
+  it('hasMacros: any calories or macro counts', () => {
+    expect(hasMacros({ calories: 0, protein_g: 0, carbs_g: 0, fat_g: 0 })).toBe(false)
+    expect(hasMacros({ calories: 0, protein_g: 0, carbs_g: 0.5, fat_g: 0 })).toBe(true)
+    expect(hasMacros(undefined)).toBe(false)
   })
 })
