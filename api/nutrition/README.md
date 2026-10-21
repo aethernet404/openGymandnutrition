@@ -36,6 +36,9 @@ switched Nutrition off.
 | `GET` / `PUT /api/nutrition/goals` | `{calories, protein_g, carbs_g, fat_g}`, each a number or null |
 | `GET` / `PUT /api/admin/nutrition` | admin: `{ enabled, aiDailyCap (0–500, 0 = AI off, default 30), usdaKey }` (the key is write-only, encrypted at rest; reads return `usdaKeySet` and the last 4 characters) |
 | `POST /api/admin/nutrition/test-usda` | admin: checks the stored USDA key with a real search |
+| `POST /api/admin/nutrition/restore-config` | admin: only while `config.json` is damaged: puts back `config.json.bak` (the settings before the last save) |
+
+Limits: ids from a request must match `^[A-Za-z0-9_-]{1,40}$` (never `__proto__`, `constructor`, `prototype`); a profile holds at most 3,660 days, 50,000 entries and 15 MB; 120 changes a minute per profile (`NUTRITION_WRITES_PER_MINUTE`); each route reads at most 4 KB to 256 KB of JSON (4.5 MB for a photo, 5 MB for Health Auto Export); USDA requests are budgeted 800 an hour / 6,000 a day for the server and 200 an hour per profile (`usda-budget.js`).
 
 The AI allowance is its own counter (`reserveAi` / `refundAi` in `store.js`), separate from the
 Coach's cap, counted per profile per UTC day.

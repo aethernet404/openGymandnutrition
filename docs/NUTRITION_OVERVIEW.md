@@ -24,10 +24,10 @@ telemetry. The only outside services it talks to are the food databases and, if 
 
 The nutrition code is deliberately kept in its own folders so upstream updates stay easy to merge:
 `api/nutrition/` (server) and `frontend/src/nutrition/` (screens), plus guides in `docs/NUTRITION_*.md`.
-The upstream files this fork did touch are few and small: `api/server.js` (4 lines: plug in the routes and delete a
-profile's nutrition file with the account), `api/coach/jobs.js`, `api/coach/core/prompts.js` and
+The upstream files this fork did touch are few and small: `api/server.js` (7 lines: plug in the routes, delete a
+profile's nutrition file with the account, and an optional size limit on `readBody`), `api/coach/jobs.js`, `api/coach/core/prompts.js` and
 `api/coach/prompts/common.md` (the opt-in Coach food summary), `frontend/src/App.jsx` (routes),
-`frontend/src/views/Home.jsx` (Home cards), `frontend/src/views/Settings.jsx` (a Settings row),
+`frontend/src/views/Home.jsx` (Home cards), `frontend/src/views/Settings.jsx` (a Settings row, and the "Source code" link, which points at this fork because the AGPL asks for the source of the modified version) and its test `Settings.reset.test.jsx`,
 `frontend/package.json` (**one new dependency, `zxing-wasm`, used to read a barcode from a photo**; upstream's rule
 is "dependency-light", so this one was a deliberate exception), `NOTICE.md`, and the fork's CI workflow.
 
@@ -158,7 +158,9 @@ persistent volume). Nutrition's part is **`/data/nutrition/`** (mode 0700, files
 | `data/nutrition/<profile id>.json` | **One file per profile with everything that profile has:** goals; saved foods, recents, supplements and the usual stack; every day's diary entries (name, brand, serving, amount, calories, macros, micronutrients, estimate records, source, confidence); the day's AI usage counter; Coach-share choice; Apple Health numbers per day (energy, steps, exercise minutes, workouts, weights) and the metadata of the Health token (id, created, last used; **not** the secret). |
 | `data/nutrition/config.json` | Admin settings: Nutrition on/off, the AI daily cap, the Health debug switch, and the **encrypted** USDA key and FatSecret Client ID + Secret. |
 | `data/nutrition/health-tokens.json` | The Apple Health token index: token id → profile, and a **SHA-256 hash** of the secret half. The token itself cannot be recovered from it. |
+| `data/nutrition/config.json.bak` | The settings as they were before the last admin save. If `config.json` is ever damaged the app reads this instead and the admin can restore it. A `config.json.damaged` appears after a restore. |
 | `data/nutrition/fatsecret-usage.json` | Today's FatSecret call counts (server total and per profile), so a restart does not reset the budget. |
+| `data/nutrition/usda-usage.json` | The USDA request counts for this hour and today (server total and per profile), for the same reason. A counter file that cannot be read is kept as `*.damaged` and counting starts again. |
 | `*.tmp` | A leftover temporary file from a write that was interrupted; safe to delete when the api is stopped. |
 
 Related files outside `nutrition/` that matter to a restore: **`data/secret`** (the key that encrypts the USDA and
@@ -187,10 +189,11 @@ restore that one file from backup. There is no automatic backup.
 | **Nutrition on/off** | Goals → Admin (admin) | switches the whole module | none |
 | **AI analyses per day** | Goals → Admin (admin) | per profile, per UTC day; 0 = off; default 30, max 500 | each analysis uses the Claude account's allowance (see below) |
 | **Claude connection** | Admin → Coach (admin) | `claude setup-token` token of one Claude account; AI logging and the stand-in fill-in use it | uses that subscription's usage; no per-call money, but the account's own limits apply |
-| **USDA key** | Goals → *USDA food search* (admin) | free key from api.data.gov (FoodData Central) | free; USDA's own rate limit (about 1,000 requests an hour per key, **unverified**) is not enforced by the app |
+| **USDA key** | Goals → *USDA food search* (admin) | free key from api.data.gov (FoodData Central), sent in the `X-Api-Key` header (that form is **unverified** against USDA's pages; the app falls back to `api_key` in the URL if USDA refuses it) | free. USDA allows about 1,000 requests an hour per key (**unverified**); the app stops at **800 an hour and 6,000 a day for the server, 200 an hour per person** (env `NUTRITION_USDA_HOURLY_CAP`, `NUTRITION_USDA_DAILY_CAP`, `NUTRITION_USDA_USER_HOURLY_CAP`). One search is 3 requests |
 | **FatSecret Client ID + Secret** | Goals → *FatSecret food search* (admin) | the "REST API OAuth 2.0" pair of the free **Basic** edition | free; 5,000 calls a day. The app stops at 4,000 a day for the server and 400 per person (env `NUTRITION_FATSECRET_DAILY_CAP`, `NUTRITION_FATSECRET_USER_CAP`; never above 5,000) |
 | **Apple Health token** | Nutrition → Apple Health (each person, for their own profile) | one token per profile; making a new one replaces the old; shown once | free; 60 uploads an hour per token |
 | **Health debug** | Goals → Health Auto Export debug (admin) | keeps the *shape* of the last payload in memory for 1 hour, off by default | none |
+| `NUTRITION_WRITES_PER_MINUTE` | api environment (optional) | changes (add, edit, delete) one profile may make per minute, default 120 | none |
 | `NUTRITION_OFF_COUNTRY` / `NUTRITION_OFF_LANG` | api environment (optional) | which Open Food Facts products are preferred (defaults `united-states`, `english`) | none |
 
 Secrets are write-only: after saving, the app shows only "set" and the last four characters of an identifier.
@@ -275,10 +278,11 @@ would corrupt them.
 - **Upper limits** shown are general adult reference values (as of 2026-10), not personal or medical advice.
 - **Open Food Facts** data is volunteer-entered and often incomplete; its search can take 3 to 8 seconds.
 - **Single replica**, no automatic backups, one JSON file per profile rewritten whole on each change.
+- **Limits per profile** (so one client cannot grow its file without end): 3,660 days, 50,000 entries, 15 MB, and 120 changes a minute. A change that would pass a limit is refused with a plain message and nothing is written.
 - **Server date is UTC:** the AI allowance, FatSecret budget and "today" for the Health token reset at midnight UTC.
 - **The Apple Health route** accepts days from 60 days ago to tomorrow only.
-- **Security review:** see `docs/NUTRITION_SECURITY_REVIEW.md` for findings that are known and not yet fixed
-  (read it before exposing the app to people you do not trust).
+- **Security review:** see `docs/NUTRITION_SECURITY_REVIEW.md`: what was found, what was fixed (with the commits) and the short list of
+  findings that are known and accepted.
 
 ## 8. Troubleshooting: what we actually hit
 
@@ -294,6 +298,9 @@ would corrupt them.
 | **Apple Health numbers stopped** | Token revoked or replaced, Health Auto Export subscription lapsed, the automation's date range is not *Today*, or the iPhone was locked (an energy of 0 and 0 is refused). | Nutrition → Apple Health shows the last update; remake the token if unsure. |
 | A deploy fails with **ImagePullBackOff** | The `ghcr-pull` token expired (January 12, 2027), the package name or digest is wrong, or the package is not readable by that token. | Section 5; check the digest against the run summary. |
 | The app shows the **old version** after a deploy | The phone's service worker cached the old frontend. | Close and reopen the app once, or hard-refresh. |
+| **"The settings file is damaged; your keys were not changed"** (admin) | `data/nutrition/config.json` no longer parses. The app refuses to save over it and reads `config.json.bak` meanwhile. | Goals → Admin → *Restore the backup*, or put a good copy of the file back. |
+| **"You have used your share of USDA lookups"** / **"This server has used its USDA lookups for this hour"** | The USDA request budget (section 4). | Wait for the top of the hour (or midnight UTC); raise the env caps only if USDA allows it. |
+| **"too many changes; wait a moment"** | More than 120 changes in a minute from one profile (usually a script or a stuck retry loop). | Wait a minute. |
 | **"your nutrition data file is damaged"** | A profile JSON no longer parses (disk problem, manual edit). The server leaves it untouched on purpose. | Restore that file from a backup (section 3). |
 
 ## 9. Where the code is

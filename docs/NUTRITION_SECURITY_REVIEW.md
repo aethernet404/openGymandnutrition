@@ -1,12 +1,13 @@
 # Nutrition: security and reliability review
 
-*Read-only review, 2026-10-21, of `api/nutrition/` and its routes at commit `e44e2f14` plus the parts of
-`api/server.js` and `api/coach/` that they rely on. **Nothing was changed.** Every fix below is a proposal.*
+*Review of 2026-10-21 of `api/nutrition/` and its routes at commit `e44e2f14`, plus the parts of `api/server.js` and
+`api/coach/` that they rely on. The review itself changed nothing; the fixes listed under "Status" were made afterwards, one
+commit each. The finding texts below are kept as they were written, so they describe the code **before** its fix.*
 
 How sure: **high** = I read the code and, where marked, reproduced it; **medium** = I read the code and reasoned about
 it but did not run it; **low** = depends on something I could not check (a third party's terms, real load).
 
-## Summary
+## Summary (as found)
 
 | # | Severity | Finding | Sure |
 |---|---|---|---|
@@ -23,6 +24,31 @@ it but did not run it; **low** = depends on something I could not check (a third
 | 11 | Low | A new frontend dependency (`zxing-wasm`) against the project's "dependency-light" rule, and its licence is unchecked | medium |
 | 12 | Low | Leftovers after a profile is deleted (token index entry, FatSecret counters); no automatic backup | high |
 | – | Info | Prompt injection through food or brand names: the damage is bounded (see 13) | high |
+
+## Status after the fixes (2026-10-21)
+
+| # | Finding | Status | Commit |
+|---|---|---|---|
+| 1 | Prototype pollution through ids | **Fixed.** Every id from a request must match `^[A-Za-z0-9_-]{1,40}$` and may not be `__proto__`, `constructor` or `prototype` (any case); foods are looked up by own property only; the nutrient table has no prototype; Health Auto Export metric names and USDA data types are looked up the same way. A test per route proves a crafted id is refused and `Object.prototype` is unchanged (`api/test/nutrition-proto.test.js`; all 8 fail on the old code). | `cb722fb3` |
+| 2 | No USDA budget; AI allowance reserved after USDA | **Fixed.** Server-wide USDA budget: 800 an hour, 6,000 a day, 200 an hour per profile (env `NUTRITION_USDA_HOURLY_CAP` max 1000, `NUTRITION_USDA_DAILY_CAP`, `NUTRITION_USDA_USER_HOURLY_CAP`), persisted in `data/nutrition/usda-usage.json`, with plain messages. The stand-in match reserves the AI allowance first and gives it back when USDA finds nothing, cannot be searched, or the model never ran. | `12ad350d` |
+| 3 | No cap on days or write rate; body sizes | **Fixed.** A profile holds at most 3,660 days, 50,000 entries and 15 MB (the change that would pass a limit is refused, nothing is written); 120 changes a minute per profile (`NUTRITION_WRITES_PER_MINUTE`); every route reads only what it expects (4 KB to 256 KB, 4.5 MB for a photo, 5 MB for Health Auto Export). | `12ad350d` |
+| 4 | Damaged `config.json` read as empty | **Fixed.** A settings file that cannot be parsed refuses saving ("The settings file is damaged; your keys were not changed.") and is left as it was; each save first keeps `config.json.bak`; reads fall back to the backup, or fail closed (no keys, AI off); the admin screen says so and can restore the backup. FatSecret's and USDA's counter files are kept aside as `.damaged` instead of being read as empty. Profile files and the Health token index already refused. | `44379a1d` |
+| 5 | AGPL source link | **Fixed.** Settings → About links to `github.com/aethernet404/openGymandnutrition` (a one-line edit in upstream's `Settings.jsx` and the matching line of its test), and the nutrition Goals page names the fork's source in its own text. | `c5be4927` |
+| 7 | USDA key in the URL | **Fixed, with one unverified part.** The key is sent in the `X-Api-Key` header. USDA's and api.data.gov's pages could not be opened from the build environment, so the header form is **not verified**; if USDA refuses it, the request is repeated once with `api_key` in the URL and the server keeps using that form (one log line, no key in it). | `20b87aa7` |
+| 8 | AI error text in the log | **Fixed.** `redact()` removes credentials, emails, addresses, URLs and long tokens and cuts the text to 160 characters. | `20b87aa7` |
+
+### Known and accepted (not fixed, on purpose, for now)
+
+| # | Finding | Why it is accepted |
+|---|---|---|
+| 6 | Open Food Facts usage may exceed what they ask of API users | The per-profile limit and the 5-minute cache stay as they are. Revisit if the server's address is ever throttled. A server-wide limiter is the fix. |
+| 9 | Health debug capture holds example health values in memory for an hour | Opt-in, off by default, memory only, redacted for credentials, admin only. Keep it off unless diagnosing. |
+| 10 | One Claude account serving several profiles | Needs a look at Anthropic's current terms, not a code change. The Coach's one-account rule already limits which profile can use which token. |
+| 11 | New dependency `zxing-wasm`; its licence is unchecked | Used only to read a barcode from a photo. Confirm its licence before any wider distribution. |
+| 12 | Leftovers after a profile is deleted; no automatic backup | The leftover token entry is dead (checked on use) and the counters reset daily. Back up `data/` (see `NUTRITION_OVERVIEW.md`). |
+| 13 | Prompt injection through food or brand names | Bounded as described below: only a candidate id, a confidence and a short reason are read from the model, and nothing is saved before an Accept. |
+
+---
 
 ## What was checked and is sound
 
@@ -53,7 +79,7 @@ it but did not run it; **low** = depends on something I could not check (a third
 
 ## Findings
 
-### 1. Prototype pollution through food ids: **High**, sure (reproduced)
+### 1. Prototype pollution through food ids: **High**, sure (reproduced) — fixed in `cb722fb3`
 
 **Where.** `api/nutrition/routes.js`: `POST /api/nutrition/entries` (`d.foods[e.foodId]`, around the use-count update),
 `PUT /api/nutrition/foods?id=` (`const f = d.foods[id]; … Object.assign(f, patch)`), and the same lookup pattern in
@@ -78,7 +104,7 @@ and reliability problem.
 (or create `d.foods` and `d.days` with `Object.create(null)` when reading); (c) add a regression test per route;
 (d) as defence in depth, run the api with `node --disable-proto=delete`. Restarting the api clears an existing pollution.
 
-### 2. No server-wide budget for USDA: **Medium**, medium sure
+### 2. No server-wide budget for USDA: **Medium**, medium sure — fixed in `12ad350d`
 
 USDA FoodData Central is called with one shared key. Requests are limited to 40 lookups a minute **per profile**, but not
 per server. One normal search now asks USDA **three** times (reference, branded, mixed dishes), so one profile can
@@ -92,7 +118,7 @@ daily budget; USDA has none.
 server, 200 for a profile), count the stand-in search and detail fetches, and make `micros/match` count a call
 against the profile's lookup limit once per entry searched. Send the key in the `X-Api-Key` header (see 7).
 
-### 3. Unbounded growth and no write rate limit: **Medium**, medium sure
+### 3. Unbounded growth and no write rate limit: **Medium**, medium sure — fixed in `12ad350d`
 
 A profile may hold at most 200 entries **per day**, but there is **no limit on the number of days** (dates from 2000
 to 2100 are accepted), and mutating routes have no rate limit (only searches, the AI and the Health token do).
@@ -105,7 +131,7 @@ shared by all profiles. I did not load-test this.
 before writing, add a per-profile write limiter (for example 120 mutations a minute) using the existing `createWindow`,
 and consider moving a profile's days to one file per month if profiles grow.
 
-### 4. A damaged `config.json` turns into "empty": **Medium**, sure (code read)
+### 4. A damaged `config.json` turns into "empty": **Medium**, sure (code read) — fixed in `44379a1d`
 
 `config.js` `readStored()` returns `{}` when the file cannot be parsed. `load()` then reports defaults (Nutrition on,
 30 AI analyses, no keys) and `save()` builds its next version from that, so the next admin save **erases the stored
@@ -115,7 +141,7 @@ It needs a corrupt file first (unclean shutdown on a filesystem without fsync, a
 **Fix.** Mirror the profile store: if the file exists but does not parse, throw a "config damaged" error, answer
 the admin routes with 500 and a message, and never overwrite the file. Keep one `config.json.bak` of the last good version.
 
-### 5. AGPL: the "Source code" link: **Medium**, medium sure
+### 5. AGPL: the "Source code" link: **Medium**, medium sure — fixed in `c5be4927`
 
 openGym is AGPL-3.0-or-later. Section 13 requires that people who use a **modified** version over a network can get
 that version's source. Settings shows a "Source code" link to `github.com/DuarteSantos8/openGym` (upstream),
@@ -133,14 +159,14 @@ server-wide limiter and rely on the existing 5-minute result cache. Attribution:
 their data is under the Open Database Licence, which asks for attribution and share-alike **if you publish a derived
 database**. The app keeps only the numbers a person logged, so I do not see a share-alike duty, but this is unverified.
 
-### 7. USDA key in the URL: **Low**, medium sure
+### 7. USDA key in the URL: **Low**, medium sure — fixed in `20b87aa7`
 
 `lookup.js` calls `…/foods/search?api_key=<key>&…`. A query-string secret shows up in any proxy, egress log or error
 message that records URLs. The code never logs URLs (errors are reduced to a kind and, for shape problems,
 key names), so nothing leaks today, but one added log line or a debugging proxy would. USDA accepts the key in a header
 (`X-Api-Key`, **unverified**); use that.
 
-### 8. AI error text in the log: **Low**, medium sure
+### 8. AI error text in the log: **Low**, medium sure — fixed in `20b87aa7`
 
 `routes.js` `aiFail` writes up to 200 characters of the runtime's error output (`stderr`) to the server log. That text
 comes from the Claude runtime and could include account or request details. Log the failure class only, or run it
@@ -208,7 +234,7 @@ Consider a nightly copy of `data/nutrition/` on the server and a one-line note i
 5. A wrong Health token only locks out its own address (ten free tries, then minutes, doubling up to an hour).
 An **unauthenticated** client can reach only: the login routes (upstream's own), the two Health ingest routes (which answer 401, and count a failure against the address), and the public health check.
 
-## The three fixes to make first
+## The three fixes to make first (done: 1, 2 and 3 below; see Status)
 
 1. **Finding 1** (prototype pollution): small, mechanical, and the only finding that can affect other profiles.
 2. **Finding 3 + 2** (write limiter, size and day caps, a USDA budget): protects the single process and the shared key from one user.
