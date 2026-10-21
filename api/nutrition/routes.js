@@ -656,10 +656,18 @@ export function nutritionRoutes({
       if (!requireAdmin(req, res)) return;
       const body = await readBody(req, BODY.small);
       const r = cfg.save(body);
-      if (!r.ok) return fail(res, 400, r.error);
+      if (!r.ok) return r.damaged ? json(res, 409, { error: r.error, code: 'config-damaged' }) : fail(res, 400, r.error);
       if (body && typeof body === 'object' && body.fatsecret !== undefined) fatsecret.forget();     // a new pair starts with no cached token or results
       if (!r.config.healthDebug) haeDebug.clear();
       json(res, 200, { ...r.config, usdaKeyHint: cfg.usdaKeyHint(), fatsecretIdHint: cfg.fatsecretIdHint(), fatsecretUsage: fatsecret.usage?.snapshot?.() ?? null, usdaUsage: usdaBudget.snapshot(), fatsecretLast: fatsecret.status?.().lastError ?? null, aiCapMax: cfg.AI_CAP_MAX, aiCapDefault: cfg.AI_CAP_DEFAULT });
+    },
+
+    // A damaged settings file: put the backup (made before the last save) back. Only valid while the file is damaged.
+    'POST /api/admin/nutrition/restore-config': async (req, res) => {
+      if (!requireAdmin(req, res)) return;
+      const r = cfg.restoreBackup();
+      if (!r.ok) return fail(res, 409, r.error);
+      json(res, 200, { ...r.config, usdaKeyHint: cfg.usdaKeyHint(), fatsecretIdHint: cfg.fatsecretIdHint() });
     },
 
     // Checks the stored FatSecret keys: a token (and the scopes it grants), then one tiny search. Not counted against the daily

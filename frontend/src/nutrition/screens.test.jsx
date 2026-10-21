@@ -22,7 +22,7 @@ const m = vi.hoisted(() => ({
   api: {
     getDay: vi.fn(), getConfig: vi.fn(), addEntries: vi.fn(), updateEntry: vi.fn(), deleteEntry: vi.fn(),
     listFoods: vi.fn(), createFood: vi.fn(), updateFood: vi.fn(), deleteFood: vi.fn(), getGoals: vi.fn(), putGoals: vi.fn(),
-    getAdmin: vi.fn(), putAdmin: vi.fn(), getRange: vi.fn(), searchFoods: vi.fn(), lookupBarcode: vi.fn(), testUsda: vi.fn(), testFatsecret: vi.fn(), getFatsecretFood: vi.fn(), matchMicros: vi.fn(), previewMicros: vi.fn(), applyMicros: vi.fn(), getStack: vi.fn(), putStack: vi.fn(), analyze: vi.fn(), setCoachShare: vi.fn(), createHealthToken: vi.fn(), revokeHealthToken: vi.fn(), putHealthSettings: vi.fn(), getHealthToken: vi.fn(), getWeight: vi.fn(), getHealthHistory: vi.fn(), getHealthDebug: vi.fn(), clearHealthDebug: vi.fn()
+    getAdmin: vi.fn(), putAdmin: vi.fn(), getRange: vi.fn(), searchFoods: vi.fn(), lookupBarcode: vi.fn(), testUsda: vi.fn(), testFatsecret: vi.fn(), getFatsecretFood: vi.fn(), restoreConfig: vi.fn(), matchMicros: vi.fn(), previewMicros: vi.fn(), applyMicros: vi.fn(), getStack: vi.fn(), putStack: vi.fn(), analyze: vi.fn(), setCoachShare: vi.fn(), createHealthToken: vi.fn(), revokeHealthToken: vi.fn(), putHealthSettings: vi.fn(), getHealthToken: vi.fn(), getWeight: vi.fn(), getHealthHistory: vi.fn(), getHealthDebug: vi.fn(), clearHealthDebug: vi.fn()
   }
 }))
 
@@ -1763,6 +1763,26 @@ describe('FatSecret in the app', () => {
     await click(byText('button', 'Remove keys'))
     expect(m.api.putAdmin).toHaveBeenLastCalledWith({ fatsecret: null })
     expect(sec().textContent).toContain('No keys set')
+  })
+
+  it('admin: a damaged settings file is said plainly, offers the backup when there is one, and restoring reloads', async () => {
+    m.user = { id: 'a', admin: true }
+    m.api.getGoals.mockResolvedValue({ goals: null })
+    const base = { enabled: true, aiDailyCap: 30, aiCapMax: 500, aiCapDefault: 30, usdaKeySet: false, fatsecretSet: false }
+    m.api.getAdmin.mockResolvedValue({ ...base, damaged: true, backupUsable: false })
+    await mount(<Goals />)
+    expect(text()).toContain('The settings file is damaged; your keys were not changed.')
+    expect(text()).toContain('There is no usable backup')
+    expect(byText('button', 'Restore the backup')).toBeUndefined()
+    act(() => root.unmount()); root = createRoot(host)
+    m.api.getAdmin.mockResolvedValue({ ...base, damaged: true, backupUsable: true })
+    m.api.restoreConfig.mockResolvedValue({})
+    await mount(<Goals />)
+    expect(text()).toContain('A backup from before the last save can be restored.')
+    m.api.getAdmin.mockResolvedValue({ ...base, damaged: false })
+    await click(byText('button', 'Restore the backup'))
+    expect(m.api.restoreConfig).toHaveBeenCalled()
+    expect(text()).not.toContain('The settings file is damaged')
   })
 
   it('FatSecret is not offered to a non-admin as a settings card', async () => {

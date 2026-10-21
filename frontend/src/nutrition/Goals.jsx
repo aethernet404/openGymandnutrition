@@ -20,7 +20,11 @@ function Admin() {
   const save = async patch => {
     try { const c = await nutri.putAdmin(patch); setCfg(c); setCap(c.aiDailyCap); toast(nt('Saved')) } catch (e) { toast(e.message) }
   }
+  const restore = async () => {
+    try { const c = await nutri.restoreConfig(); setCfg(await nutri.getAdmin().catch(() => c)); toast(nt('Settings restored from the backup')) } catch (e) { toast(e.message) }
+  }
   return <Section title={nt('Admin')} footer={nt('The AI limit counts photo and text analyses per person per day (UTC). 0 turns AI logging off. It is separate from the Coach limit.')}>
+    {cfg.damaged && <div className="nut-banner warn" role="alert"><span>{nt('The settings file is damaged; your keys were not changed. Nothing can be saved until it is fixed.')} {cfg.backupUsable ? nt('A backup from before the last save can be restored.') : nt('There is no usable backup: put a good copy of data/nutrition/config.json back and enter the keys again if needed.')}</span>{cfg.backupUsable && <Button size="sm" onClick={restore}>{nt('Restore the backup')}</Button>}</div>}
     <Row icon="globe" iconTint="var(--blue)" title={nt('Nutrition on')}>
       <Switch checked={cfg.enabled} onChange={on => save({ enabled: on })} />
     </Row>

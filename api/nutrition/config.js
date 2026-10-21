@@ -16,15 +16,55 @@ const file = () => path.join(dataDir(), 'config.json');
 
 const DEFAULTS = { enabled: true, aiDailyCap: AI_CAP_DEFAULT };
 
-function readStored() {
-  try { return JSON.parse(fs.readFileSync(file(), 'utf8')) || {}; } catch { return {}; /* absent = defaults */ }
+/* A settings file that exists but cannot be read is NOT an empty one. Reading it as empty and then saving would replace
+ * the stored (encrypted) USDA and FatSecret keys and every switch with nothing. So:
+ *   - while config.json cannot be parsed, saving is refused (CONFIG_DAMAGED_TEXT) and the file is left exactly as it is;
+ *   - reading falls back to config.json.bak, the copy made before the last save, if that one parses; if it does not,
+ *     the keys are unavailable and AI stays off (fail closed), while the diary itself keeps working;
+ *   - the admin is told (`damaged` in load(), the admin screen), and can restore the backup (restoreBackup).
+ * A file that does not exist is simply a server nobody has configured yet. */
+export const CONFIG_DAMAGED_TEXT = 'The settings file is damaged; your keys were not changed. Restore the backup (Goals → Admin) or put a good copy of data/nutrition/config.json back.';
+const bak = () => file() + '.bak';
+
+function parse(f) {
+  let raw;
+  try { raw = fs.readFileSync(f, 'utf8'); } catch (e) { return e.code === 'ENOENT' ? { missing: true } : { bad: true }; }
+  try {
+    const j = JSON.parse(raw);
+    return j && typeof j === 'object' && !Array.isArray(j) ? { data: j } : { bad: true };
+  } catch { return { bad: true }; }
+}
+
+/** { data, damaged, usingBackup } — `data` is what to read from (the backup when the main file is damaged). */
+function stored() {
+  const main = parse(file());
+  if (main.data) return { data: main.data, damaged: false, usingBackup: false };
+  if (main.missing) return { data: {}, damaged: false, usingBackup: false };
+  const b = parse(bak());
+  return b.data ? { data: b.data, damaged: true, usingBackup: true } : { data: {}, damaged: true, usingBackup: false };
+}
+const stored_ = stored;
+const readStored = () => stored().data;
+
+/** Is data/nutrition/config.json present but unreadable? */
+export const isDamaged = () => stored().damaged;
+export const backupUsable = () => parse(bak()).data !== undefined;
+
+/** Put the backup back over a damaged settings file (the damaged one is kept as config.json.damaged). */
+export function restoreBackup() {
+  if (!isDamaged()) return { ok: false, error: 'the settings file is not damaged' };
+  if (!backupUsable()) return { ok: false, error: 'there is no usable backup of the settings; enter the keys again after replacing data/nutrition/config.json' };
+  try { fs.renameSync(file(), file() + '.damaged'); } catch { /* already gone */ }
+  atomicWrite(file(), fs.readFileSync(bak(), 'utf8'), 0o600);
+  return { ok: true, config: load() };
 }
 
 /** The settings the app may see. The USDA key itself never leaves the server: only whether one is set. */
 export function load() {
-  const stored = readStored();
+  const { data: stored, damaged, usingBackup } = stored_();
   const cap = Number.isInteger(stored.aiDailyCap) && stored.aiDailyCap >= 0 && stored.aiDailyCap <= AI_CAP_MAX ? stored.aiDailyCap : DEFAULTS.aiDailyCap;
-  return { enabled: stored.enabled !== false, aiDailyCap: cap, usdaKeySet: !!usdaKey(), fatsecretSet: !!fatsecretCreds(), healthDebug: stored.healthDebug === true };
+  // Damaged with no usable backup: AI (which costs something) stays off rather than falling back to the default allowance.
+  return { damaged, backupUsable: damaged ? usingBackup : undefined, enabled: stored.enabled !== false, aiDailyCap: damaged && !usingBackup ? 0 : cap, usdaKeySet: !!usdaKey(), fatsecretSet: !!fatsecretCreds(), healthDebug: stored.healthDebug === true };
 }
 
 /** The decrypted USDA FoodData Central key, or null. Server-side use only. */
@@ -58,6 +98,7 @@ export function usdaKeyHint() {
 /** @returns {{ok:true, config}|{ok:false, error}} */
 export function save(patch) {
   if (patch == null || typeof patch !== 'object' || Array.isArray(patch)) return { ok: false, error: 'send the settings as an object' };
+  if (isDamaged()) return { ok: false, damaged: true, error: CONFIG_DAMAGED_TEXT };
   const stored = readStored();
   const next = { enabled: load().enabled, aiDailyCap: load().aiDailyCap, ...(stored.healthDebug === true ? { healthDebug: true } : {}), ...(stored.usdaKey ? { usdaKey: stored.usdaKey } : {}), ...(stored.fatsecret ? { fatsecret: stored.fatsecret } : {}) };
   if (patch.enabled !== undefined) {
@@ -95,6 +136,8 @@ export function save(patch) {
     }
   }
   fs.mkdirSync(dataDir(), { recursive: true, mode: 0o700 });
+  // The last good settings are kept before every save (config.json.bak), so a bad write can always be taken back.
+  if (parse(file()).data) { try { atomicWrite(bak(), fs.readFileSync(file(), 'utf8'), 0o600); } catch { /* a failed copy must not block the save */ } }
   atomicWrite(file(), JSON.stringify(next, null, 2), 0o600);
   return { ok: true, config: load() };
 }

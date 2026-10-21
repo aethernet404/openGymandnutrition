@@ -38,6 +38,8 @@ export const getFatsecretFood = id => api('/api/nutrition/fatsecret/food?' + q({
 export const matchMicros = (date, ids, replace = false) => send('POST', '/api/nutrition/micros/match', { date, ids, ...(replace ? { replace: true } : {}) })
 export const previewMicros = (date, id, fdcId) => send('POST', '/api/nutrition/micros/preview', { date, id, fdcId })
 export const applyMicros = (date, id, body) => send('POST', '/api/nutrition/micros/apply', { date, id, ...body })
+// A damaged settings file: put the backup made before the last save back.
+export const restoreConfig = () => send('POST', '/api/admin/nutrition/restore-config', {})
 export const testUsda = () => send('POST', '/api/admin/nutrition/test-usda', {})
 export const testFatsecret = () => send('POST', '/api/admin/nutrition/test-fatsecret', {})
 

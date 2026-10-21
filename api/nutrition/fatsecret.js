@@ -35,6 +35,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { atomicWrite } from '../durable.js';
+import { readCounter } from './usda-budget.js';
 import { clean, round } from './validate.js';
 import { chooseServingGrams, sensibleGrams } from './rank.js';
 import { LookupError } from './lookup.js';
@@ -75,15 +76,16 @@ const err = (kind, message, text) => new LookupError(kind, message, text || TEXT
 /* ------------------------------ a daily budget ------------------------------ */
 
 /** Calls made today (UTC), in total and per profile. Persisted, so a restart cannot be used to start over. */
-export function createUsage({ file, now = Date.now, serverCap = SERVER_DAILY_CAP, userCap = USER_DAILY_CAP } = {}) {
+export function createUsage({ file, now = Date.now, serverCap = SERVER_DAILY_CAP, userCap = USER_DAILY_CAP, log = console.error } = {}) {
   let state = null;
   const load = () => {
     const today = utcDay(now());
     if (!state) {
-      try { state = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { state = null; }
-      if (!state || typeof state !== 'object') state = { day: today, total: 0, users: {} };
+      state = readCounter(file, log);                 // a damaged counter file is kept aside, then counting starts again
+      if (!state || !Number.isInteger(state.total)) state = { day: today, total: 0, users: {} };
+      state.users = Object.assign(Object.create(null), state.users && typeof state.users === 'object' ? state.users : {});
     }
-    if (state.day !== today) state = { day: today, total: 0, users: {} };
+    if (state.day !== today) state = { day: today, total: 0, users: Object.create(null) };
     return state;
   };
   const save = () => { try { fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 }); atomicWrite(file, JSON.stringify(state), 0o600); } catch { /* counting must never break a search */ } };
@@ -92,9 +94,10 @@ export function createUsage({ file, now = Date.now, serverCap = SERVER_DAILY_CAP
     take(uid) {
       const s = load();
       if (s.total >= serverCap()) return 'server';
-      if (uid && (s.users[uid] || 0) >= userCap()) return 'user';
+      const mine = uid && Object.hasOwn(s.users, uid) ? s.users[uid] : 0;
+      if (uid && mine >= userCap()) return 'user';
       s.total++;
-      if (uid) s.users[uid] = (s.users[uid] || 0) + 1;
+      if (uid) s.users[uid] = mine + 1;
       save();
       return null;
     },
