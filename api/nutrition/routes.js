@@ -99,12 +99,14 @@ export function nutritionRoutes({
     return auth;
   };
 
+  /** An entry or food id from a request, or an answer and null. */
+  const idOf = (res, s) => { const r = v.idParam(s); if (!r.ok) { invalid(res, r); return null; } return r.value; };
   const dateOf = (res, s) => { const r = v.dateParam(s); if (!r.ok) { invalid(res, r); return null; } return r.value; };
 
   /** Fill macros from a food × qty when the client sent a foodId and no numbers. */
   function resolveFood(d, e) {
     if (!e.needsFood) return null;
-    const f = d.foods[e.foodId];
+    const f = v.own(d.foods, e.foodId);
     if (!f) return 'that food no longer exists';
     const q = e.qty ?? 1;
     e.calories = Math.round(f.per.calories * q);
@@ -184,7 +186,7 @@ export function nutritionRoutes({
           }
           const problem = resolveFood(d, e);
           if (problem) return { error: problem };
-          if (!counted && e.foodId && d.foods[e.foodId]) { const f = d.foods[e.foodId]; f.useCount = (f.useCount || 0) + 1; f.lastUsed = Date.now(); }
+          if (!counted && e.foodId && v.own(d.foods, e.foodId)) { const f = d.foods[e.foodId]; f.useCount = (f.useCount || 0) + 1; f.lastUsed = Date.now(); }
         }
         return { entries: store.addEntries(d, date, list), day: store.dayView(d, date) };
       });
@@ -196,7 +198,7 @@ export function nutritionRoutes({
     'PUT /api/nutrition/entries': guarded(async (req, res, user) => {
       const q = query(req);
       const date = dateOf(res, q.get('date')); if (!date) return;
-      const id = String(q.get('id') || '').slice(0, 40); if (!id) return fail(res, 400, 'id is required');
+      const id = idOf(res, q.get('id')); if (!id) return;
       const body = await readBody(req);
       const checked = v.entry(body, { partial: true });
       if (!checked.ok) return invalid(res, checked);
@@ -215,7 +217,7 @@ export function nutritionRoutes({
     'DELETE /api/nutrition/entries': guarded(async (req, res, user) => {
       const q = query(req);
       const date = dateOf(res, q.get('date')); if (!date) return;
-      const id = String(q.get('id') || '').slice(0, 40); if (!id) return fail(res, 400, 'id is required');
+      const id = idOf(res, q.get('id')); if (!id) return;
       const out = await store.mutate(user.id, d => store.deleteEntry(d, date, id) ? { day: store.dayView(d, date) } : null);
       if (!out) return fail(res, 404, 'no such entry');
       json(res, 200, out);
@@ -265,13 +267,13 @@ export function nutritionRoutes({
       const seen = new Set();
       for (const i of raw) {
         const qty = typeof i?.qty === 'number' && Number.isFinite(i.qty) ? i.qty : NaN;
-        if (typeof i?.foodId !== 'string' || !(qty >= 0.01 && qty <= v.LIMITS.qty)) return fail(res, 400, 'each item needs a foodId and a number of servings from 0.01 to ' + v.LIMITS.qty);
+        if (!v.validId(i?.foodId) || !(qty >= 0.01 && qty <= v.LIMITS.qty)) return fail(res, 400, 'each item needs a foodId and a number of servings from 0.01 to ' + v.LIMITS.qty);
         if (seen.has(i.foodId)) return fail(res, 400, 'a supplement can be in the stack once');
         seen.add(i.foodId);
-        items.push({ foodId: i.foodId.slice(0, 40), qty: v.round(qty, 2) });
+        items.push({ foodId: i.foodId, qty: v.round(qty, 2) });
       }
       const out = await store.mutate(user.id, d => {
-        if (items.some(i => d.foods[i.foodId]?.type !== 'supplement')) return null;
+        if (items.some(i => v.own(d.foods, i.foodId)?.type !== 'supplement')) return null;
         d.stack = items;
         return items;
       });
@@ -281,12 +283,12 @@ export function nutritionRoutes({
 
     // Edit a food (any of its fields), or just favourite it. Entries already logged keep their numbers.
     'PUT /api/nutrition/foods': guarded(async (req, res, user) => {
-      const id = String(query(req).get('id') || '').slice(0, 40); if (!id) return fail(res, 400, 'id is required');
+      const id = idOf(res, query(req).get('id')); if (!id) return;
       const body = await readBody(req);
       const checked = v.food(body, { partial: true });
       if (!checked.ok) return invalid(res, checked);
       const food = await store.mutate(user.id, d => {
-        const f = d.foods[id];
+        const f = v.own(d.foods, id);
         if (!f) return null;
         // A search result or AI recent is a snapshot of someone else's data: only its favourite
         // flag is the user's to change. Editing it means saving it as their own custom food.
@@ -305,8 +307,8 @@ export function nutritionRoutes({
     }),
 
     'DELETE /api/nutrition/foods': guarded(async (req, res, user) => {
-      const id = String(query(req).get('id') || '').slice(0, 40); if (!id) return fail(res, 400, 'id is required');
-      const ok = await store.mutate(user.id, d => (d.foods[id] ? (delete d.foods[id], true) : false));
+      const id = idOf(res, query(req).get('id')); if (!id) return;
+      const ok = await store.mutate(user.id, d => (v.own(d.foods, id) ? (delete d.foods[id], true) : false));
       if (!ok) return fail(res, 404, 'no such food');
       json(res, 200, { ok: true });
     }),
@@ -480,7 +482,7 @@ export function nutritionRoutes({
     'POST /api/nutrition/micros/match': guarded(async (req, res, user) => {
       const body = await readBody(req);
       const date = dateOf(res, body?.date); if (!date) return;
-      const ids = Array.isArray(body?.ids) ? [...new Set(body.ids.map(x => String(x).slice(0, 40)))] : null;
+      const ids = Array.isArray(body?.ids) && body.ids.every(v.validId) ? [...new Set(body.ids)] : null;
       if (!ids || !ids.length || ids.length > standin.MAX_BATCH) return fail(res, 400, `ids must list 1 to ${standin.MAX_BATCH} entries`);
       const usdaKey = cfg.usdaKey();
       if (!usdaKey) return json(res, 409, { error: 'Filling in micronutrients needs the USDA key (an admin adds it under Goals → Admin).', code: 'no-usda', ai: allowance(user.id) });
@@ -541,7 +543,7 @@ export function nutritionRoutes({
     'POST /api/nutrition/micros/preview': guarded(async (req, res, user) => {
       const body = await readBody(req);
       const date = dateOf(res, body?.date); if (!date) return;
-      const id = String(body?.id || '').slice(0, 40);
+      const id = idOf(res, body?.id); if (!id) return;
       const usdaKey = cfg.usdaKey();
       if (!usdaKey) return json(res, 409, { error: 'Filling in micronutrients needs the USDA key.', code: 'no-usda' });
       if (throttled(res, user)) return;
@@ -559,7 +561,7 @@ export function nutritionRoutes({
     'POST /api/nutrition/micros/apply': guarded(async (req, res, user) => {
       const body = await readBody(req);
       const date = dateOf(res, body?.date); if (!date) return;
-      const id = String(body?.id || '').slice(0, 40);
+      const id = idOf(res, body?.id); if (!id) return;
       if (body?.remove === true) {
         const out = await store.mutate(user.id, d => {
           const hit = store.findEntry(d, date, id);

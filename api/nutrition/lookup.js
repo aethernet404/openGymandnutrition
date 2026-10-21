@@ -167,7 +167,7 @@ export function normaliseUsda(f) {
     bases.push(withMicros({ label: household ? `${household} (${round(grams, 1)} g)` : `${round(grams, 1)} g`, grams: round(grams, 1), per: scalePer(per100, grams / 100) }, scaleMicros(m100, grams / 100)));
   }
   bases.push(withMicros({ label: '100 g', grams: 100, per: per100 }, m100));
-  const kind = USDA_KIND[String(f.dataType || '').toLowerCase()] || 'other';
+  const kind = Object.hasOwn(USDA_KIND, String(f.dataType || '').toLowerCase()) ? USDA_KIND[String(f.dataType).toLowerCase()] : 'other';
   return { source: 'usda', kind, ext: String(f.fdcId), name, brand: titleCase(clean(f.brandName || f.brandOwner, 60)), bases };
 }
 

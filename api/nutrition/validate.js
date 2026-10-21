@@ -39,6 +39,19 @@ export const clean = (v, max) => String(v ?? '').replace(/[\u0000-\u001f\u007f]/
 
 export const round = (v, d = 1) => { const k = 10 ** d; return Math.round(v * k) / k; };
 
+/* ---------- ids ---------- */
+
+// Every id this module makes (entries, foods, supplements) is 12 characters of base64url. An id from a request is only
+// ever used as a key after it passes this, and the names that live on every object are refused outright: a plain object
+// keyed by `__proto__` or `constructor` is not a missing entry, it is Object.prototype or Object.
+export const ID_RE = /^[A-Za-z0-9_-]{1,40}$/;
+const RESERVED = new Set(['__proto__', 'constructor', 'prototype']);
+export const validId = s => typeof s === 'string' && ID_RE.test(s) && !RESERVED.has(s.toLowerCase());
+export const idParam = (s, what = 'id') => (validId(s) ? good(s) : bad(`${what} is not valid`));
+
+/** obj[key] only when `key` is the object's own property: never something inherited from Object.prototype. */
+export const own = (obj, key) => (obj != null && typeof key === 'string' && Object.hasOwn(obj, key) ? obj[key] : undefined);
+
 export function validDate(s) {
   if (typeof s !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
   const d = new Date(s + 'T00:00:00Z');
@@ -209,7 +222,10 @@ export function entry(body, { partial = false, foodGiven = false } = {}) {
     if (!m.ok) return m;
     out.micros = hasMicros(m.value) ? m.value : null;
   }
-  if (body.foodId !== undefined) out.foodId = body.foodId == null ? null : clean(body.foodId, 40) || null;
+  if (body.foodId !== undefined) {
+    if (body.foodId !== null && !validId(body.foodId)) return bad('foodId is not valid');
+    out.foodId = body.foodId;
+  }
   if (body.note !== undefined) out.note = clean(body.note, 200);
 
   const hasMacros = MACROS.some(k => body[k] !== undefined);

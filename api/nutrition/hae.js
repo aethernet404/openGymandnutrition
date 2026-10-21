@@ -195,7 +195,8 @@ export function parseHae(body) {
 
   for (const metric of metricsIn) {
     if (!metric || typeof metric !== 'object' || typeof metric.name !== 'string') continue;
-    const kind = KIND_OF[canonicalName(metric.name)];
+    const cname = canonicalName(metric.name);
+    const kind = Object.hasOwn(KIND_OF, cname) ? KIND_OF[cname] : undefined;
     if (!kind) { if (ignored.size < 20) ignored.add(String(metric.name).replace(/[^\w .\-()]/g, '').slice(0, 40)); continue; }
     found[kind] = true;
     const points = Array.isArray(metric.data) ? metric.data : [];

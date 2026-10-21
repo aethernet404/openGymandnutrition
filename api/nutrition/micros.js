@@ -54,7 +54,8 @@ const T = [
 ];
 export const NUTRIENTS = T.map(([key, label, unit, group, dv, max, ul]) => ({ key, label, unit, group, dv, max, ...(ul ? { ul } : {}) }));
 export const KEYS = NUTRIENTS.map(n => n.key);
-export const BY_KEY = Object.fromEntries(NUTRIENTS.map(n => [n.key, n]));
+// No prototype: a client-supplied key such as "constructor" must read as an unknown nutrient, not as Object.
+export const BY_KEY = Object.assign(Object.create(null), Object.fromEntries(NUTRIENTS.map(n => [n.key, n])));
 
 const isNum = v => typeof v === 'number' && Number.isFinite(v);
 const r4 = v => Math.round(v * 1e4) / 1e4;

@@ -21,7 +21,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { atomicWrite } from '../durable.js';
 import { dataDir } from './config.js';
-import { MACROS, LIMITS, round } from './validate.js';
+import { MACROS, LIMITS, round, own } from './validate.js';
 import { relevance } from './rank.js';
 import { sumMicros } from './micros.js';
 
@@ -334,5 +334,5 @@ export function searchSaved(d, q, limit = 10) {
 
 /** [{ foodId, qty }] of saved supplements that still exist (a deleted one drops out). */
 export function stackOf(d) {
-  return (Array.isArray(d.stack) ? d.stack : []).filter(i => d.foods[i?.foodId]?.type === 'supplement').map(i => ({ foodId: i.foodId, qty: i.qty }));
+  return (Array.isArray(d.stack) ? d.stack : []).filter(i => own(d.foods, i?.foodId)?.type === 'supplement').map(i => ({ foodId: i.foodId, qty: i.qty }));
 }
