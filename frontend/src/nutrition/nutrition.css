@@ -229,3 +229,39 @@
 .nut-stack-pick{display:flex;align-items:center;gap:10px;flex:1 1 180px;min-width:0;text-align:start}
 .nut-stack-box{display:inline-flex;align-items:center;justify-content:center;flex:none;width:24px;height:24px;border-radius:7px;border:1.5px solid var(--label-3);color:var(--acc)}
 .nut-stack-pick.on .nut-stack-box{border-color:var(--acc);background:var(--surface-2)}
+
+/* Fill in micronutrients (USDA stand-ins): the review sheet, the log-time option, the Edit entry box, the card's switch */
+.nut-fill-opt{margin:12px 0 0;min-width:0}
+.nut-fill-opt label{display:flex;align-items:flex-start;gap:10px;min-width:0;font-size:15px;color:var(--label)}
+.nut-fill-opt label.off{color:var(--label-3)}
+.nut-fill-opt label>span{min-width:0;overflow-wrap:anywhere}
+.nut-fill-opt input{flex:none;width:20px;height:20px;margin:1px 0 0}
+.nut-fill-opt>.small{margin:4px 0 0 30px;overflow-wrap:anywhere}
+.nut-fill-head{align-items:center;gap:8px;min-width:0}
+.nut-fill-head h3{min-width:0;overflow-wrap:anywhere;margin:0}
+.nut-fill-list{margin:10px 0;padding-inline-start:20px;min-width:0;overflow-wrap:anywhere}
+.nut-fill-priv{overflow-wrap:anywhere}
+.nut-fill-card{margin:12px 0;padding:12px;border-radius:12px;background:var(--surface-2);min-width:0;overflow-wrap:anywhere}
+.nut-fill-card.done{opacity:.8}
+.nut-fill-name{min-width:0;overflow-wrap:anywhere}
+.nut-fill-using{margin:6px 0 2px;font-size:15px;overflow-wrap:anywhere}
+.nut-fill-reason{margin:0 0 6px;font-style:italic;overflow-wrap:anywhere}
+.nut-fill-h{margin:10px 0 4px;font-size:13px;font-weight:600;color:var(--label-2)}
+.nut-fill-amounts{list-style:none;margin:0;padding:0;min-width:0;display:grid;grid-template-columns:minmax(0,1fr);gap:2px}
+.nut-fill-amounts li{display:flex;flex-wrap:wrap;justify-content:space-between;gap:2px 10px;font-size:14px;min-width:0}
+.nut-fill-amounts li>span{min-width:0;overflow-wrap:anywhere}
+.nut-fill-warn{margin:8px 0 0}
+.nut-fill-warn>span{min-width:0;overflow-wrap:anywhere}
+.nut-fill-cands{display:flex;flex-direction:column;gap:6px;margin:10px 0 0;min-width:0}
+.nut-fill-cand{display:flex;flex-wrap:wrap;justify-content:space-between;gap:2px 10px;width:100%;min-width:0;padding:10px 12px;border-radius:10px;background:var(--surface);color:var(--label);text-align:start;font-size:14px}
+.nut-fill-cand>span{min-width:0;overflow-wrap:anywhere}
+.nut-fill-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px;min-width:0}
+.nut-fill-actions>*{min-width:0}
+.nut-fill-box{margin:12px 0 0;padding:10px 12px;border-radius:12px;background:var(--surface-2);min-width:0;overflow-wrap:anywhere}
+.nut-fill-box>.small{margin-top:6px}
+.nut-fill-boxbtns{flex-wrap:wrap;gap:8px;margin-top:8px}
+.nut-fill-bar{display:flex;flex-direction:column;align-items:flex-start;gap:6px;margin:10px 0 4px;min-width:0}
+.nut-fill-bar>.small{overflow-wrap:anywhere}
+.nut-est-switch{gap:10px;margin:8px 2px;flex-wrap:wrap;min-width:0}
+.nut-est-switch>span{min-width:0;overflow-wrap:anywhere}
+.nut-est-mark{color:var(--label-2);font-weight:400}

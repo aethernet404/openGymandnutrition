@@ -11,10 +11,11 @@ import { MOBILE } from '../lib/mobile.js'
 import { scanCode } from '../lib/scan.js'
 import BarcodeScanner from './BarcodeScanner.jsx'
 import AiLog from './AiLog.jsx'
+import { FillOption, openFillMicros } from './FillMicros.jsx'
 import { allowanceText, unavailableText } from './ai.js'
 import { nt } from './i18n.js'
 import * as nutri from './api.js'
-import { GROUPS, NUTRIENTS, cleanMicros, hasMicros, scaleMicros } from './micros.js'
+import { GROUPS, NUTRIENTS, canFill, cleanMicros, hasMicros, scaleMicros } from './micros.js'
 import { MACRO_LABEL, MEALS, MEAL_LABEL, amountPatch, entryBase, foodBody, foodFromEntry, gramsForQty, macroLine, qtyForGramsOf, quickBody, savedFoodBody, scaleEntry, scaleFood, trim } from './diary.js'
 import { FATSECRET_CREDIT, FATSECRET_URL, NO_RETRY, SOURCE_LABEL, SOURCE_SHORT, barcodeOf, defaultBase, gramsOf, hitLine, qtyForGrams, snapshotOf, sourceNotes } from './lookup.js'
 import { NO_CODE_TEXT, gtinCheckOk, lookupCode, scanMethods } from './barcode.js'
@@ -141,19 +142,25 @@ function QuickAdd({ date, meal, initialName = '', onSaved, close }) {
   const [m, setM] = useState({ calories: null, protein_g: null, carbs_g: null, fat_g: null })
   const [mi, setMi] = useState({})
   const [busy, setBusy] = useState(false)
+  const [fill, setFill] = useState(false)          // look up vitamins and minerals from USDA after saving (off unless ticked)
   const save = async () => {
     const r = quickBody({ name, meal, ...m }, date)
     if (!r.ok) { toast(nt(r.error)); return }
     // Only micronutrients typed in are sent; a quick add never has guessed ones.
     const typed = cleanMicros(mi)
     setBusy(true)
-    try { await nutri.addEntries(hasMicros(typed) ? { ...r.body, micros: typed } : r.body); onSaved(); close(); toast(nt('Added')) } catch (e) { fail(e); setBusy(false) }
+    try {
+      const out = await nutri.addEntries(hasMicros(typed) ? { ...r.body, micros: typed } : r.body)
+      onSaved(); close(); toast(nt('Added'))
+      if (fill) openFillMicros({ date, entries: out?.entries || [], onDone: onSaved })
+    } catch (e) { fail(e); setBusy(false) }
   }
   return <>
     <TextField value={name} maxLength={120} placeholder={nt('Name (optional)')} onChange={e => setName(e.target.value)} aria-label={nt('Name')} />
     <div style={{ height: 10 }} />
     <MacroFields v={m} set={setM} />
     <MoreNutrients v={mi} set={setMi} />
+    {!hasMicros(cleanMicros(mi)) && <FillOption checked={fill} onChange={setFill} />}
     <div style={{ height: 14 }} />
     <Button variant="primary" onClick={save} disabled={busy}>{nt('Add to {0}', nt(MEAL_LABEL[meal]).toLowerCase())}</Button>
   </>
@@ -170,6 +177,7 @@ export function FatSecretCredit() {
 function Portion({ name, brand, bases, meal, onBack, onAdd, busy, tag, credit = false }) {
   const [bi, setBi] = useState(0)
   const [qty, setQty] = useState(1)
+  const [fill, setFill] = useState(false)
   const base = bases[bi]
   const grams = gramsOf(base, qty)
   const s = scaleFood({ per: base.per, serving: { grams: base.grams } }, qty)
@@ -194,8 +202,9 @@ function Portion({ name, brand, bases, meal, onBack, onAdd, busy, tag, credit = 
     </label>}
     <div className="nut-preview"><b>{s.calories}</b> kcal<span className="muted"> · {macroLine(s)}</span></div>
     {credit && <div className="nut-credit-row"><FatSecretCredit /></div>}
+    {credit && !hasMicros(base.micros) && <FillOption checked={fill} onChange={setFill} />}
     <div style={{ height: 14 }} />
-    <Button variant="primary" onClick={() => onAdd(qty, base)} disabled={busy}>{nt('Add to {0}', nt(MEAL_LABEL[meal]).toLowerCase())}</Button>
+    <Button variant="primary" onClick={() => onAdd(qty, base, { fill })} disabled={busy}>{nt('Add to {0}', nt(MEAL_LABEL[meal]).toLowerCase())}</Button>
   </>
 }
 
@@ -422,12 +431,13 @@ function SearchTab({ date, meal, ai, onSaved, onDescribe, onQuick, close }) {
     setOpening(null)
   }
 
-  const add = async (qty, base) => {
+  const add = async (qty, base, opts) => {
     setBusy(true)
     try {
       // One of the person's own saved foods is logged by its id, like from My foods: no snapshot, no lookup, no AI.
-      await nutri.addEntries(picked.source === 'mine' ? { date, meal, source: 'food', foodId: picked.ext, qty } : { date, meal, source: 'food', qty, food: snapshotOf(picked, base) })
+      const out = await nutri.addEntries(picked.source === 'mine' ? { date, meal, source: 'food', foodId: picked.ext, qty } : { date, meal, source: 'food', qty, food: snapshotOf(picked, base) })
       onSaved(); close(); toast(nt('Added'))
+      if (opts?.fill) openFillMicros({ date, entries: out?.entries || [], onDone: onSaved })
     } catch (e) { fail(e); setBusy(false) }
   }
 
@@ -497,6 +507,30 @@ export const openAddSheet = props => useUI.getState().openSheet(close => <AddShe
 
 /* ------------------------------ edit an entry ------------------------------ */
 
+/** On the Edit entry sheet: fill in vitamins and minerals from a USDA stand-in, or say where the estimate came from and offer to change or remove it. */
+function EstimateBox({ entry, date, onSaved, close }) {
+  const est = entry.microsEst
+  const [busy, setBusy] = useState(false)
+  if (entry.meal === 'supplements') return null
+  const done = () => { onSaved(); close() }
+  const remove = async () => {
+    setBusy(true)
+    try { await nutri.applyMicros(date, entry.id, { remove: true }); onSaved(); close(); toast(nt('Estimate removed')) } catch (e) { fail(e); setBusy(false) }
+  }
+  if (est) return <div className="nut-fill-box">
+    <div className="small">{nt('Vitamins and minerals are estimated from USDA {0} ({1}), not read from a label.', est.name, est.dataType)}</div>
+    <div className="row nut-fill-boxbtns">
+      <Button size="sm" icon="sparkles" onClick={() => openFillMicros({ date, entries: [entry], replace: true, onDone: done })} disabled={busy}>{nt('Choose another match')}</Button>
+      <Button size="sm" variant="ghost" style={{ color: 'var(--red)' }} onClick={remove} disabled={busy}>{nt('Remove estimate')}</Button>
+    </div>
+  </div>
+  if (!canFill(entry)) return null
+  return <div className="nut-fill-box">
+    <Button size="sm" icon="sparkles" onClick={() => openFillMicros({ date, entries: [entry], onDone: done })}>{nt('Fill in micronutrients')}</Button>
+    <div className="muted small">{nt('Finds the closest USDA food and shows the vitamins and minerals it would add, as estimates, for you to accept. Uses the entry as last saved and 1 AI analysis.')}</div>
+  </div>
+}
+
 function EditEntry({ entry, date, onSaved, close }) {
   const [name, setName] = useState(entry.name)
   const [meal, setMeal] = useState(entry.meal)
@@ -564,6 +598,7 @@ function EditEntry({ entry, date, onSaved, close }) {
     <div style={{ height: 10 }} />
     <MacroFields v={m} set={editMacro} />
     <MoreNutrients v={mi} set={nv => { setMi(nv); if (changed) setMiManual(true) }} note={nt('Amounts for this whole entry. Leave a box empty if unknown: that stays unknown, not 0.')} />
+    <EstimateBox entry={entry} date={date} onSaved={onSaved} close={close} />
     {manualKeys.length > 0 && <div className="nut-banner nut-manual"><span>{nt('You edited {0} by hand. It stays as you set it when you change the amount.', manualKeys.map(k => nt(MACRO_LABEL[k]).toLowerCase()).join(', '))}</span> <button className="linkbtn" onClick={resetManual}>{nt('Recalculate')}</button></div>}
     <div style={{ height: 10 }} />
     {entry.meal !== 'supplements' && <SelectRow title={nt('Meal')} sheetTitle={nt('Meal')} value={meal} onChange={setMeal} options={mealOptions()} />}

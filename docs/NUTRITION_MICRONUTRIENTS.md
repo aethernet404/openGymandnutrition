@@ -7,12 +7,12 @@ Everything below lives in your own `data/nutrition/<you>.json`. No new service, 
 A food, a portion and a diary entry carry an optional `micros` object with **only the nutrients that are known** for
 it. A missing key means *unknown* and is never stored, summed or drawn as 0. A label that says 0 mg is a real 0 and is
 kept. **Quick add and AI photo / Describe estimates have no micronutrient data and nothing ever guesses any**; they stay
-unknown unless you fill them in (Edit entry → More nutrients).
+unknown unless you type them in (Edit entry → More nutrients) or fill them in from a USDA stand-in (next section).
 
 * A food's micronutrients are copied onto the entry **when you log it**, scaled by the amount, so past days do not move
   if a database changes later.
-* The diary card says how much of the day its numbers are based on ("Based on 6 of 9 entries that have micronutrient
-  data") and lists what is unknown.
+* The diary card splits the day's entries in three ("From labels and databases: 2, estimated from USDA stand-ins: 3, no
+  data: 2") and lists what is unknown.
 * Every value is validated: numbers only (no text, NaN or negatives), each nutrient has a ceiling for one entry that
   catches unit mix-ups (for example 1,000,000 mg of calcium), unknown nutrient names are refused.
 
@@ -140,6 +140,45 @@ search excerpts, the rest are from the fact sheets as I know them (2022-2025 ver
 * **Micronutrients card**: supplement amounts are added in when *Food + supplements* is on (the default); *Food only* leaves
   them out. The upper-limit note always uses everything taken.
 * **Limits**: 40 supplement entries a day, 200 saved supplements, 30 in the stack; the usual 200 entries a day and 2,000 foods.
+
+## Fill in micronutrients from a USDA stand-in (estimates)
+
+Most entries (Quick add, AI Photo and Describe results, many FatSecret brand foods) have no vitamins or minerals. The app can
+fill the gaps **without inventing a number**:
+
+1. **Where:** Edit entry → *Fill in micronutrients*, or *Fill in missing* on the Micronutrients card (all entries of the day
+   that have no vitamin or mineral of their own; fibre, sodium and the like do not count as having data). Optionally at log
+   time: *Look up vitamins and minerals from USDA* (off by default) on the AI review screen, Quick add and FatSecret foods.
+2. **How it works:** the server searches **USDA FoodData Central** by each entry's food name (the existing USDA key) and gives
+   the AI the entry (name, brand, amount, calories and macros) and up to 8 candidate USDA foods (fdcId, name, data type).
+   The AI answers, per entry, with the fdcId of the closest candidate, a confidence and a short reason, or "no good match".
+   **It never returns nutrient numbers, and anything that looks like one in its answer is ignored**; an fdcId that is not one
+   of that entry's candidates counts as "no match". The server then fetches that food from USDA and maps its nutrients to our
+   29 with the same conversions as everywhere else (including micro-sign µg units).
+3. **What USDA data types are searched** for the candidates: **Foundation, SR Legacy and Survey (FNDDS)** (mixed dishes such as
+   taquitos and burritos live in FNDDS), plus **Branded** only when the entry has a brand. The ordinary food search in the add
+   screen is unchanged: Foundation + SR Legacy in one request and Branded in another, **not** Survey (FNDDS).
+4. **Scaling:** the stand-in's per-100 g amounts are scaled by the entry's own grams; with no grams, the weight is worked out
+   from calories (entry kcal ÷ the stand-in's kcal per 100 g). The stand-in's calories and macros at that weight are compared
+   with the entry's (gap thresholds: calories 50 kcal and 25 %, protein 5 g and 40 %, carbs 8 g and 40 %, fat 4 g and 40 %,
+   both must be exceeded); a gap is reported in words ("this stand-in has about twice the fat") and the review offers
+   *Choose another* or *Cancel* (*Accept* becomes *Accept anyway*). A nutrient USDA does not state for that food stays unknown.
+5. **Review before saving:** per entry, "Using USDA <name> (<data type>) as a stand-in, confidence <level>", the amounts that
+   would be added, *Accept*, *Choose another* (the other candidates; no extra AI call) and *Cancel*. Nothing is saved before
+   *Accept*. The numbers are recomputed on the server from USDA at that moment; the client's numbers are never stored.
+6. **Storage:** `entry.microsEst = { fdcId, name, dataType, confidence, grams, how, qty, micros, at }`, **apart from**
+   `entry.micros`. Label and database values are never overwritten: the estimate only holds nutrients the entry does not have,
+   and if a value is typed in later the typed one wins. It scales with later amount edits (`qty` ratio). It is not copied when
+   an entry is saved as a food, and *Remove estimate* deletes it.
+7. **Diary card:** three groups (labels and databases / estimated / no data), a "≈" before any amount that includes an
+   estimate, an *Include estimated values* switch (remembered on this device, on by default; off leaves estimates out of every
+   total and note), and the upper-limit note says "This includes estimated values." when estimates contribute to the total it
+   states. Totals the server sends stay label-and-database only (`totals`); estimates are in `est.totals`, counts in `groups`.
+8. **Cost and privacy:** one AI call and **one allowance per batch of up to 12 entries** (more entries are done in several
+   batches), through the Coach's Claude Agent SDK path (text only, no tools, same lockdown and token, no API key), refunded
+   when the model never ran (no runtime, credential problem, provider error) and kept when it ran (timeout, unreadable answer).
+   Nothing is sent to the AI or USDA but food names, brand names, amounts, calories and macros (USDA: only the name and brand
+   search text and the fdcId). No photos, dates, profile names or entry ids. Choosing another candidate and accepting use no AI.
 
 ## NIH Dietary Supplement Label Database (DSLD): research only, not built
 

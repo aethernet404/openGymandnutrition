@@ -53,6 +53,12 @@ describe('nutrition layout survives narrow screens and large text', () => {
     expect(rule('.nut-saveprompt')).toMatch(/flex-wrap:wrap/)
     expect(rule('.nut-saveprompt>span')).toMatch(/min-width:0/)
   })
+  it('the micronutrient fill-in sheet, its option, the edit box and the estimate switch shrink, wrap and break long names', () => {
+    for (const sel of ['.nut-fill-opt', '.nut-fill-head', '.nut-fill-card', '.nut-fill-amounts', '.nut-fill-amounts li', '.nut-fill-cands', '.nut-fill-cand', '.nut-fill-actions', '.nut-fill-box', '.nut-fill-bar', '.nut-est-switch']) expect(rule(sel), sel).toMatch(/min-width:0/)
+    for (const sel of ['.nut-fill-card', '.nut-fill-name', '.nut-fill-using', '.nut-fill-reason', '.nut-fill-list', '.nut-fill-box', '.nut-fill-cand>span', '.nut-fill-amounts li>span', '.nut-fill-opt label>span', '.nut-fill-head h3']) expect(rule(sel), sel).toMatch(/overflow-wrap:anywhere/)
+    for (const sel of ['.nut-fill-actions', '.nut-fill-amounts li', '.nut-fill-cand', '.nut-fill-boxbtns', '.nut-est-switch']) expect(rule(sel), sel).toMatch(/flex-wrap:wrap/)
+    expect(rule('.nut-fill-amounts')).toMatch(/minmax\(0,\s*1fr\)/)
+  })
   it('the Micronutrients card and the More nutrients form section shrink and wrap; the bar never sets a width in CSS', () => {
     for (const sel of ['.nut-micros', '.nut-micros-b', '.nut-mgroup', '.nut-mrow', '.nut-more', '.nut-more-b']) expect(rule(sel), sel).toMatch(/min-width:0/)
     for (const sel of ['.nut-micros-h>span', '.nut-mrow-t>span', '.nut-cov', '.nut-munk', '.nut-mnote', '.nut-ul-notes', '.nut-more-note']) expect(rule(sel), sel).toMatch(/overflow-wrap:anywhere/)

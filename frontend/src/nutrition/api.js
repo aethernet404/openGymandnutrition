@@ -33,6 +33,11 @@ export const searchFoods = (text, source = 'all') => api('/api/nutrition/search?
 export const lookupBarcode = code => api('/api/nutrition/barcode?' + q({ code }), { timeout: 20000 })
 // The full servings of a FatSecret food, asked only when a search row is tapped (food.get v5).
 export const getFatsecretFood = id => api('/api/nutrition/fatsecret/food?' + q({ id }), { timeout: 30000 })
+// Fill in micronutrients from USDA stand-ins. match: one AI call for up to 12 entries (the model only picks which USDA food is
+// closest; every number comes from USDA). preview: the numbers for another candidate, no AI. apply: accept (or remove) one.
+export const matchMicros = (date, ids, replace = false) => send('POST', '/api/nutrition/micros/match', { date, ids, ...(replace ? { replace: true } : {}) })
+export const previewMicros = (date, id, fdcId) => send('POST', '/api/nutrition/micros/preview', { date, id, fdcId })
+export const applyMicros = (date, id, body) => send('POST', '/api/nutrition/micros/apply', { date, id, ...body })
 export const testUsda = () => send('POST', '/api/admin/nutrition/test-usda', {})
 export const testFatsecret = () => send('POST', '/api/admin/nutrition/test-fatsecret', {})
 

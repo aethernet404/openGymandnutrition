@@ -99,23 +99,37 @@ export function amountText(key, value, locale) {
 }
 
 /**
- * The day's micros summary from the server ({ food, supplements }, each { totals, withData, entries }) for a mode:
- * 'food' or 'all' (food + supplements). Totals add the known amounts only.
+ * The day's micros summary from the server ({ food, supplements }, each { totals, withData, entries, est, groups }) for a
+ * mode: 'food' or 'all' (food + supplements). `totals` add the known label / database amounts; the amounts that come from
+ * accepted USDA stand-ins (`est.totals`, only for nutrients the entry does not know itself) are added when `includeEst`,
+ * and the nutrients they contributed to are listed in `marked` so the card can mark them. Older answers have no est or groups.
  */
-export function pick(summary, mode) {
-  const food = summary?.food || { totals: {}, withData: 0, entries: 0 }
-  const sup = summary?.supplements || { totals: {}, withData: 0, entries: 0 }
-  if (mode !== 'all') return { totals: food.totals || {}, withData: food.withData || 0, entries: food.entries || 0, supplements: 0 }
-  const totals = { ...(food.totals || {}) }
-  for (const [k, v] of Object.entries(sup.totals || {})) totals[k] = r4((totals[k] || 0) + v)
-  return { totals, withData: (food.withData || 0) + (sup.withData || 0), entries: (food.entries || 0) + (sup.entries || 0), supplements: sup.entries || 0 }
+export function pick(summary, mode, includeEst = true) {
+  const empty = { totals: {}, withData: 0, entries: 0, est: { totals: {} } }
+  const parts = mode === 'all' ? [summary?.food || empty, summary?.supplements || empty] : [summary?.food || empty]
+  const totals = {}
+  const est = {}
+  const groups = { labels: 0, estimated: 0, none: 0 }
+  let withData = 0
+  let entries = 0
+  for (const b of parts) {
+    for (const [k, v] of Object.entries(b.totals || {})) totals[k] = r4((totals[k] || 0) + v)
+    for (const [k, v] of Object.entries(b.est?.totals || {})) est[k] = r4((est[k] || 0) + v)
+    withData += b.withData || 0
+    entries += b.entries || 0
+    const g = b.groups || { labels: b.withData || 0, estimated: 0, none: (b.entries || 0) - (b.withData || 0) }
+    groups.labels += g.labels; groups.estimated += g.estimated; groups.none += g.none
+  }
+  const all = { ...totals }
+  if (includeEst) for (const [k, v] of Object.entries(est)) all[k] = r4((all[k] || 0) + v)
+  return { totals: all, labelTotals: totals, estTotals: est, marked: includeEst ? Object.keys(est) : [], includeEst, withData, entries, groups, supplements: mode === 'all' ? (summary?.supplements?.entries || 0) : 0 }
 }
 
-/** Rows for the card, grouped: only nutrients that have a known amount today, in table order. Others are listed as unknown. */
-export function groupedRows(totals) {
+/** Rows for the card, grouped: only nutrients that have a known amount today, in table order. Others are listed as unknown. `marked` = nutrients that include estimated amounts. */
+export function groupedRows(totals, marked = []) {
   return GROUPS.map(g => ({
     ...g,
-    rows: NUTRIENTS.filter(n => n.group === g.id && isNum(totals?.[n.key])).map(n => ({ key: n.key, label: n.label, unit: n.unit, value: totals[n.key], pct: pctDv(n.key, totals[n.key]) })),
+    rows: NUTRIENTS.filter(n => n.group === g.id && isNum(totals?.[n.key])).map(n => ({ key: n.key, label: n.label, unit: n.unit, value: totals[n.key], pct: pctDv(n.key, totals[n.key]), estimated: marked.includes(n.key) })),
     unknown: NUTRIENTS.filter(n => n.group === g.id && !isNum(totals?.[n.key])).map(n => n.label)
   }))
 }
@@ -127,21 +141,50 @@ export function coverage(p) {
 }
 
 /**
+ * The entries split in three: their own data (labels and databases), estimated from USDA stand-ins, no data. `counted` is
+ * how many the totals are based on (estimated ones only while estimates are included). null when there are no entries.
+ */
+export function coverageGroups(p) {
+  if (!p.entries) return null
+  const { labels, estimated, none } = p.groups
+  const counted = labels + (p.includeEst ? estimated : 0)
+  return { entries: p.entries, labels, estimated, none, counted, nothing: counted === 0, left: !p.includeEst && estimated > 0 }
+}
+
+/** Can "Fill in micronutrients" be offered for this entry? (The same rule as the server's skipReason.) */
+export function canFill(e) {
+  if (!e || e.meal === 'supplements' || !String(e.name || '').trim() || e.microsEst) return false
+  return !KEYS.some(k => isNum(e.micros?.[k]) && (BY_KEY[k].group === 'vitamins' || BY_KEY[k].group === 'minerals'))
+}
+
+const MACRO_WORD = { calories: 'calories', protein_g: 'protein', carbs_g: 'carbs', fat_g: 'fat' }
+/** One difference between a stand-in and the entry in words, e.g. "about twice the fat (19 g, you logged 9 g)". Plain strings for nt(). */
+export function diffText(d) {
+  const what = MACRO_WORD[d.key]
+  const unit = d.key === 'calories' ? ' kcal' : ' g'
+  const r = d.ratio
+  const how = r == null ? 'some' : r >= 2.5 ? `about ${Math.round(r)} times the` : r >= 1.8 ? 'about twice the' : r > 1 ? 'more' : r <= 0.4 ? 'less than half the' : r <= 0.6 ? 'about half the' : 'less'
+  return { how, what, numbers: `${d.standin}${unit}`, logged: `${d.entry}${unit}` }
+}
+
+/**
  * Notes for nutrients above the usual adult upper limit, from what was actually eaten and taken today (food AND
  * supplements, whatever the card is showing). A limit with scope 'supplement' is compared with the supplement total
  * only, because that is what it is about (magnesium, niacin, folic acid, vitamin E, preformed vitamin A).
  * Neutral by design: it states the fact and where to take it.
  * @returns {{ key:string, label:string, total:number, ul:number, what:string|null, note:string|null, amount:string, limit:string }[]}
  */
-export function upperLimitNotes(summary, locale) {
-  const food = summary?.food?.totals || {}
+export function upperLimitNotes(summary, locale, includeEst = true) {
+  const food = { ...(summary?.food?.totals || {}) }
   const sup = summary?.supplements?.totals || {}
+  const estFood = includeEst ? summary?.food?.est?.totals || {} : {}
+  for (const [k, v] of Object.entries(estFood)) food[k] = r4((food[k] || 0) + v)
   const out = []
   for (const n of NUTRIENTS) {
     if (!n.ul) continue
     const total = n.ul.scope === 'supplement' ? (sup[n.key] ?? null) : (isNum(food[n.key]) || isNum(sup[n.key]) ? (food[n.key] || 0) + (sup[n.key] || 0) : null)
     if (total == null || total <= n.ul.value) continue
-    out.push({ key: n.key, label: n.label, total, ul: n.ul.value, what: n.ul.what || null, note: n.ul.note || null, scope: n.ul.scope, amount: amountText(n.key, total, locale), limit: amountText(n.key, n.ul.value, locale) })
+    out.push({ key: n.key, label: n.label, estimated: n.ul.scope !== 'supplement' && isNum(estFood[n.key]) && estFood[n.key] > 0, total, ul: n.ul.value, what: n.ul.what || null, note: n.ul.note || null, scope: n.ul.scope, amount: amountText(n.key, total, locale), limit: amountText(n.key, n.ul.value, locale) })
   }
   return out
 }

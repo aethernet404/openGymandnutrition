@@ -22,7 +22,7 @@ const m = vi.hoisted(() => ({
   api: {
     getDay: vi.fn(), getConfig: vi.fn(), addEntries: vi.fn(), updateEntry: vi.fn(), deleteEntry: vi.fn(),
     listFoods: vi.fn(), createFood: vi.fn(), updateFood: vi.fn(), deleteFood: vi.fn(), getGoals: vi.fn(), putGoals: vi.fn(),
-    getAdmin: vi.fn(), putAdmin: vi.fn(), getRange: vi.fn(), searchFoods: vi.fn(), lookupBarcode: vi.fn(), testUsda: vi.fn(), testFatsecret: vi.fn(), getFatsecretFood: vi.fn(), getStack: vi.fn(), putStack: vi.fn(), analyze: vi.fn(), setCoachShare: vi.fn(), createHealthToken: vi.fn(), revokeHealthToken: vi.fn(), putHealthSettings: vi.fn(), getHealthToken: vi.fn(), getWeight: vi.fn(), getHealthHistory: vi.fn(), getHealthDebug: vi.fn(), clearHealthDebug: vi.fn()
+    getAdmin: vi.fn(), putAdmin: vi.fn(), getRange: vi.fn(), searchFoods: vi.fn(), lookupBarcode: vi.fn(), testUsda: vi.fn(), testFatsecret: vi.fn(), getFatsecretFood: vi.fn(), matchMicros: vi.fn(), previewMicros: vi.fn(), applyMicros: vi.fn(), getStack: vi.fn(), putStack: vi.fn(), analyze: vi.fn(), setCoachShare: vi.fn(), createHealthToken: vi.fn(), revokeHealthToken: vi.fn(), putHealthSettings: vi.fn(), getHealthToken: vi.fn(), getWeight: vi.fn(), getHealthHistory: vi.fn(), getHealthDebug: vi.fn(), clearHealthDebug: vi.fn()
   }
 }))
 
@@ -2103,10 +2103,10 @@ describe('Micronutrients card', () => {
     const t = () => card().textContent
     const rowsText = () => [...card().querySelectorAll('.nut-mrow')].map(r => r.textContent).join('|')
     expect(t()).toMatch(/Iron.*9 mg · 50%/); expect(t()).toMatch(/Vitamin D.*0 mcg · 0%/); expect(rowsText()).not.toContain('Magnesium')
-    expect(t()).toContain('Based on 6 of 9 entries that have micronutrient data.')
+    expect(t()).toContain('From labels and databases: 6, estimated from USDA stand-ins: 0, no data: 3.')
     await click(byText('button', 'Food + supplements'))
     expect(t()).toMatch(/Iron.*27 mg/); expect(rowsText()).toContain('Magnesium')
-    expect(t()).toContain('Based on 8 of 11 entries that have micronutrient data.')
+    expect(t()).toContain('From labels and databases: 8, estimated from USDA stand-ins: 0, no data: 3.')
     await click(byText('button', 'Food only'))
     act(() => root.unmount()); root = createRoot(host)
     await mount(<Diary />); await open()
@@ -2118,13 +2118,13 @@ describe('Micronutrients card', () => {
     m.api.getDay.mockResolvedValue(dayOf({ micros: { food: { totals: {}, withData: 0, entries: 4 }, supplements: { totals: {}, withData: 0, entries: 0 } } }))
     await mount(<Diary />)
     await open()
-    expect(card().querySelector('.nut-cov').textContent).toContain('None of the 4 entries have micronutrient data')
+    expect(card().querySelector('.nut-cov').textContent).toContain('From labels and databases: 0, estimated from USDA stand-ins: 0, no data: 4.')
     expect(card().querySelectorAll('.nut-mrow')).toHaveLength(0)
     expect(card().textContent).not.toMatch(/\b0 (mg|mcg|g)\b/)
     act(() => root.unmount()); root = createRoot(host)
     m.api.getDay.mockResolvedValue(dayOf({ micros: { food: { totals: { iron_mg: 2 }, withData: 3, entries: 3 }, supplements: { totals: {}, withData: 0, entries: 0 } } }))
     await mount(<Diary />); await open()
-    expect(card().querySelector('.nut-cov').textContent).toBe('Based on all 3 entries.')
+    expect(card().querySelector('.nut-cov').textContent).toBe('From labels and databases: 3, estimated from USDA stand-ins: 0, no data: 0.')
     act(() => root.unmount()); root = createRoot(host)
     m.api.getDay.mockResolvedValue(dayOf({ micros: { food: { totals: {}, withData: 0, entries: 0 }, supplements: { totals: {}, withData: 0, entries: 0 } } }))
     await mount(<Diary />); await open()
@@ -2163,6 +2163,222 @@ describe('Micronutrients card', () => {
     m.api.getDay.mockResolvedValue(dayOf())
     await mount(<Diary />)
     expect(card()).toBeNull()
+  })
+})
+
+describe('Estimated micronutrients on the card', () => {
+  const card = () => host.querySelector('.nut-micros')
+  const open = async () => click(card().querySelector('.nut-micros-h'))
+  const EST = {
+    food: { totals: { iron_mg: 5, zinc_mg: 38 }, withData: 2, entries: 7, est: { totals: { iron_mg: 2, calcium_mg: 90, zinc_mg: 4 } }, groups: { labels: 2, estimated: 3, none: 2 } },
+    supplements: { totals: {}, withData: 0, entries: 0, est: { totals: {} }, groups: { labels: 0, estimated: 0, none: 0 } }
+  }
+  beforeEach(() => { try { localStorage.clear() } catch {} })
+
+  it('the coverage line has three groups; estimated amounts are marked ≈ and added; the closed card counts them too', async () => {
+    m.api.getDay.mockResolvedValue(dayOf({ micros: EST }))
+    await mount(<Diary />)
+    expect(card().textContent).toContain('5 of 7 entries')
+    await open()
+    expect(card().querySelector('.nut-cov').textContent).toBe('From labels and databases: 2, estimated from USDA stand-ins: 3, no data: 2.')
+    const row = name => [...card().querySelectorAll('.nut-mrow')].find(r => r.textContent.includes(name))
+    expect(row('Iron').textContent).toMatch(/≈ 7 mg/)                   // 5 from labels + 2 estimated
+    expect(row('Calcium').textContent).toMatch(/≈ 90 mg/)
+    expect(card().querySelector('.nut-mnote').textContent).toContain('≈ includes amounts estimated from USDA stand-ins')
+  })
+
+  it('"Include estimated values" is on by default, leaves the estimates out when off, and is remembered on this device', async () => {
+    m.api.getDay.mockResolvedValue(dayOf({ micros: EST }))
+    await mount(<Diary />); await open()
+    const sw = () => card().querySelector('[role="switch"][aria-label="Include estimated values"]')
+    expect(sw().getAttribute('aria-checked')).toBe('true')
+    await click(sw())
+    expect(sw().getAttribute('aria-checked')).toBe('false')
+    const row = name => [...card().querySelectorAll('.nut-mrow')].find(r => r.textContent.includes(name))
+    expect(row('Iron').textContent).toMatch(/5 mg/); expect(row('Iron').textContent).not.toContain('≈')
+    expect(row('Calcium')).toBeUndefined()                                // only estimated: not shown at all
+    expect(card().querySelector('.nut-cov').textContent).toContain('Estimated values are not included in the amounts below.')
+    expect(card().textContent).not.toContain('≈ includes amounts')
+    act(() => root.unmount()); root = createRoot(host)
+    await mount(<Diary />); await open()
+    expect(sw().getAttribute('aria-checked')).toBe('false')              // remembered
+    expect(localStorage.getItem('nut_micros_est')).toBe('off')
+  })
+
+  it('no switch when nothing in the day is estimated; old answers without estimate fields still render', async () => {
+    m.api.getDay.mockResolvedValue(dayOf({ micros: { food: { totals: { iron_mg: 2 }, withData: 1, entries: 2 }, supplements: { totals: {}, withData: 0, entries: 0 } } }))
+    await mount(<Diary />); await open()
+    expect(card().querySelector('[role="switch"]')).toBeNull()
+    expect(card().querySelector('.nut-cov').textContent).toBe('From labels and databases: 1, estimated from USDA stand-ins: 0, no data: 1.')
+    expect(card().textContent).not.toContain('≈')
+  })
+
+  it('the upper-limit note says it includes estimated values when estimates push the total over; it is gone when they are left out', async () => {
+    m.api.getDay.mockResolvedValue(dayOf({ micros: EST }))
+    await mount(<Diary />)
+    const notes = () => [...card().querySelectorAll('.nut-ul-notes li')].map(li => li.textContent)
+    expect(notes().some(n => /Zinc: 42 mg today is above the usual upper limit/.test(n) && n.includes('This includes estimated values.'))).toBe(true)
+    await open()
+    await click(card().querySelector('[role="switch"][aria-label="Include estimated values"]'))
+    expect(notes()).toEqual([])                                           // 38 mg of labelled zinc is under 40
+  })
+})
+
+describe('Fill in micronutrients', () => {
+  const TAQ = { id: 'e1', meal: 'snack', name: 'Taquitos, Beef & Cheese', brand: '7-Eleven', source: 'food', calories: 190, protein_g: 7, carbs_g: 20, fat_g: 9, qty: 1, grams: 76, micros: { sodium_mg: 400 } }
+  const WRAP = { id: 'e2', meal: 'lunch', name: 'Chicken wrap', source: 'ai', calories: 650, protein_g: 40, carbs_g: 60, fat_g: 20, qty: 1 }
+  const RICH = { id: 'e3', meal: 'lunch', name: 'Fortified cereal', source: 'food', calories: 150, protein_g: 3, carbs_g: 30, fat_g: 1, qty: 1, micros: { vit_c_mg: 20 } }
+  const PREVIEW = { ok: true, fdcId: 2003003, name: 'Taquito, beef and cheese', dataType: 'Survey (FNDDS)', grams: 76, how: 'entry', diffs: [], micros: { vit_c_mg: 1.5, calcium_mg: 91.2 }, alreadyKnown: ['sodium_mg'], empty: false }
+  const CANDS = [{ fdcId: 2003003, name: 'Taquito, beef and cheese', dataType: 'Survey (FNDDS)' }, { fdcId: 1000001, name: 'Chimichanga, fried', dataType: 'SR Legacy' }]
+  const MICROS = { food: { totals: {}, withData: 0, entries: 3, est: { totals: {} }, groups: { labels: 0, estimated: 0, none: 3 } }, supplements: { totals: {}, withData: 0, entries: 0 } }
+  const card = () => host.querySelector('.nut-micros')
+  const day = (entries = [TAQ, WRAP, RICH]) => m.api.getDay.mockResolvedValue(dayOf({ entries, micros: MICROS }))
+  beforeEach(() => {
+    try { localStorage.clear() } catch {}
+    m.api.getConfig.mockResolvedValue({ ai: { limit: 30, used: 3, remaining: 27, available: true, reason: null }, lookup: { usda: true } })
+  })
+  const openFill = async () => {
+    await mount(<Diary />)
+    await click(card().querySelector('.nut-micros-h'))
+    await click(byText('button', 'Fill in missing'))
+    return showSheet()
+  }
+
+  it('the card offers "Fill in missing" for the entries without vitamins or minerals only (fibre or sodium alone does not count)', async () => {
+    day(); await mount(<Diary />)
+    await click(card().querySelector('.nut-micros-h'))
+    expect(byText('button', 'Fill in missing (2)')).toBeTruthy()
+    await click(byText('button', 'Fill in missing'))
+    const s = await showSheet()
+    expect(s.el.textContent).toContain('Taquitos, Beef & Cheese'); expect(s.el.textContent).toContain('Chicken wrap')
+    expect(s.el.textContent).not.toContain('Fortified cereal')
+    expect(s.el.querySelector('[aria-label="Close"]')).toBeTruthy()       // a close button, not only Cancel
+  })
+
+  it('no button when every entry has its own vitamins or minerals', async () => {
+    day([RICH]); await mount(<Diary />)
+    await click(card().querySelector('.nut-micros-h'))
+    expect(byText('button', 'Fill in missing')).toBeUndefined()
+  })
+
+  it('it says what is sent and what it costs, and asks nothing until "Find stand-ins" is pressed; one request for the whole batch', async () => {
+    day()
+    const s = await openFill()
+    expect(s.el.textContent).toContain('Only the food names, brands, amounts, calories and macros are sent to the AI')
+    expect(s.el.textContent).toContain('Uses 1 of your AI analyses')
+    expect(m.api.matchMicros).not.toHaveBeenCalled()
+    m.api.matchMicros.mockResolvedValue({ results: [{ id: 'e1', status: 'match', confidence: 'high', reason: 'same dish', candidates: CANDS, preview: PREVIEW }, { id: 'e2', status: 'none', reason: 'nothing like it', candidates: CANDS }], ai: { limit: 30, used: 4, remaining: 26, available: true } })
+    await click(byText('button', 'Find stand-ins'))
+    expect(m.api.matchMicros).toHaveBeenCalledTimes(1)
+    expect(m.api.matchMicros).toHaveBeenCalledWith(today, ['e1', 'e2'], false)
+  })
+
+  it('the review shows the stand-in, its data type, the confidence and the amounts; nothing is saved until Accept', async () => {
+    day()
+    const s = await openFill()
+    m.api.matchMicros.mockResolvedValue({ results: [{ id: 'e1', status: 'match', confidence: 'high', reason: 'same dish', candidates: CANDS, preview: PREVIEW }, { id: 'e2', status: 'none', reason: 'nothing like it', candidates: CANDS }], ai: { limit: 30, used: 4, remaining: 26, available: true } })
+    await click(byText('button', 'Find stand-ins'))
+    const t = s.el.textContent
+    expect(t).toContain('Using USDA Taquito, beef and cheese (Survey (FNDDS)) as a stand-in, confidence high')
+    expect(t).toMatch(/Vitamin C\s*1\.5 mg/); expect(t).toMatch(/Calcium\s*91\.2 mg/)
+    expect(t).toContain('For 76 g, the weight you logged.')
+    expect(t).toContain('1 values you already have are kept as they are.')
+    expect(t).toContain('No good USDA match.')
+    expect(m.api.applyMicros).not.toHaveBeenCalled()
+    m.api.applyMicros.mockResolvedValue({})
+    const onDone = m.api.getDay.mock.calls.length
+    await click(byText('button', 'Accept'))
+    expect(m.api.applyMicros).toHaveBeenCalledWith(today, 'e1', { fdcId: 2003003, confidence: 'high' })
+    expect(s.el.textContent).toContain('Saved as an estimate from USDA Taquito, beef and cheese.')
+    expect(m.api.getDay.mock.calls.length).toBeGreaterThan(onDone)         // the diary behind reloads
+  })
+
+  it('a stand-in whose macros differ a lot says so in words and offers another candidate or Cancel; Accept becomes "Accept anyway"', async () => {
+    day([TAQ])
+    const s = await openFill()
+    const greasy = { ...PREVIEW, fdcId: 1000001, name: 'Chimichanga, fried', dataType: 'SR Legacy', diffs: [{ key: 'fat_g', entry: 9, standin: 19, ratio: 2.11 }] }
+    m.api.matchMicros.mockResolvedValue({ results: [{ id: 'e1', status: 'match', confidence: 'low', reason: '', candidates: CANDS, preview: greasy }] })
+    await click(byText('button', 'Find stand-ins'))
+    expect(s.el.querySelector('.nut-fill-warn').textContent).toContain('This stand-in has about twice the fat (19 g; you logged 9 g).')
+    expect(byText('button', 'Accept anyway')).toBeTruthy(); expect(byText('button', 'Choose another')).toBeTruthy(); expect(byText('button', 'Cancel')).toBeTruthy()
+    m.api.previewMicros.mockResolvedValue({ preview: PREVIEW })
+    await click(byText('button', 'Choose another'))
+    await click([...s.el.querySelectorAll('.nut-fill-cand')].find(b => b.textContent.includes('Taquito, beef and cheese')))
+    expect(m.api.previewMicros).toHaveBeenCalledWith(today, 'e1', 2003003)
+    expect(s.el.textContent).toContain('Using USDA Taquito, beef and cheese (Survey (FNDDS)) as a stand-in, chosen by you')
+    expect(s.el.querySelector('.nut-fill-warn')).toBeNull()
+    m.api.applyMicros.mockResolvedValue({})
+    await click(byText('button', 'Accept'))
+    expect(m.api.applyMicros).toHaveBeenCalledWith(today, 'e1', { fdcId: 2003003 })           // no AI confidence for a pick of the person's own
+  })
+
+  it('Cancel on an entry leaves it as it was and saves nothing; an entry the AI found nothing for can still be picked by hand', async () => {
+    day([WRAP])
+    const s = await openFill()
+    m.api.matchMicros.mockResolvedValue({ results: [{ id: 'e2', status: 'none', reason: 'nothing like it', candidates: CANDS }] })
+    await click(byText('button', 'Find stand-ins'))
+    expect(byText('button', 'Choose one myself')).toBeTruthy()
+    await click(byText('button', 'Cancel'))
+    expect(s.el.textContent).toContain('Left as it was.')
+    expect(m.api.applyMicros).not.toHaveBeenCalled()
+  })
+
+  it('failures are shown with the reason and a way on; the model never being reached is not blamed on the person', async () => {
+    day([TAQ])
+    const s = await openFill()
+    m.api.matchMicros.mockRejectedValue(Object.assign(new Error('AI logging is not available on this server.'), { status: 503, data: { code: 'unavailable', ai: { limit: 30, used: 3, remaining: 27, available: false } } }))
+    await click(byText('button', 'Find stand-ins'))
+    expect(s.el.querySelector('.nut-banner.warn').textContent).toContain('AI logging is not available on this server.')
+    expect(byText('button', 'Try again')).toBeTruthy()
+  })
+
+  it('Edit entry: the action appears for an entry with no vitamins or minerals, not for one that has them; an estimate shows its source and can be removed', async () => {
+    openEditEntry({ entry: WRAP, date: today, onSaved: vi.fn() })
+    let s = await showSheet()
+    expect(byText('button', 'Fill in micronutrients')).toBeTruthy()
+    await click(byText('button', 'Fill in micronutrients'))
+    expect(m.sheets.length).toBe(2)                                         // the fill sheet
+    openEditEntry({ entry: RICH, date: today, onSaved: vi.fn() })
+    s = await showSheet()
+    expect(byText('button', 'Fill in micronutrients')).toBeUndefined()
+    const est = { ...WRAP, microsEst: { fdcId: 2003003, name: 'Taquito, beef and cheese', dataType: 'Survey (FNDDS)', micros: { vit_c_mg: 1 }, qty: 1 } }
+    const onSaved = vi.fn(); m.api.applyMicros.mockResolvedValue({})
+    openEditEntry({ entry: est, date: today, onSaved })
+    s = await showSheet()
+    expect(s.el.textContent).toContain('estimated from USDA Taquito, beef and cheese (Survey (FNDDS)), not read from a label')
+    await click(byText('button', 'Remove estimate'))
+    expect(m.api.applyMicros).toHaveBeenCalledWith(today, 'e2', { remove: true })
+    expect(onSaved).toHaveBeenCalled()
+  })
+
+  it('log time: the box is off by default; ticked, Quick add opens the review for the new entry after saving; unticked opens nothing', async () => {
+    m.api.addEntries.mockResolvedValue({ entries: [{ id: 'n1', meal: 'snack', name: 'Burrito', source: 'manual', calories: 400, protein_g: 15, carbs_g: 50, fat_g: 15, qty: 1 }] })
+    const run = async tick => {
+      m.sheets.length = 0
+      openAddSheet({ date: today, meal: 'snack', onSaved: vi.fn() })
+      const s = await showSheet()
+      await click(byText('button', 'Quick add'))
+      await setValue(s.el.querySelector('input[aria-label="Name"]'), 'Burrito')
+      await setValue(s.el.querySelector('input[aria-label="Calories"]'), '400')
+      const box = s.el.querySelector('.nut-fill-opt input[type="checkbox"]')
+      expect(box.checked).toBe(false)
+      if (tick) await click(box)
+      await click(byText('button', 'Add to snacks'))
+      return m.sheets.length
+    }
+    expect(await run(false)).toBe(1)
+    expect(await run(true)).toBe(2)
+    expect(m.sheets.length).toBe(2)
+  })
+
+  it('log time: the box is unavailable, with the reason, when the AI or the USDA key is missing', async () => {
+    m.api.getConfig.mockResolvedValue({ ai: { limit: 30, used: 3, remaining: 27, available: true }, lookup: { usda: false } })
+    openAddSheet({ date: today, meal: 'snack', onSaved: vi.fn() })
+    const s = await showSheet()
+    await click(byText('button', 'Quick add'))
+    const opt = s.el.querySelector('.nut-fill-opt')
+    expect(opt.querySelector('input').disabled).toBe(true)
+    expect(opt.textContent).toContain('Needs the USDA key')
   })
 })
 

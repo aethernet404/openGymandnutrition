@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest'
 import * as api from '../../../api/nutrition/micros.js'
-import { BY_KEY, KEYS, NUTRIENTS, amountText, cleanMicros, coverage, groupedRows, hasMicros, microsForSend, pctDv, pick, scaleMicros, upperLimitNotes } from './micros.js'
+import { BY_KEY, KEYS, NUTRIENTS, amountText, canFill, cleanMicros, coverage, coverageGroups, diffText, groupedRows, hasMicros, microsForSend, pctDv, pick, scaleMicros, upperLimitNotes } from './micros.js'
 
 describe('the table is the server’s table', () => {
   it('same nutrients, units, groups, Daily Values, bounds and upper limits, in the same order', () => {
@@ -46,9 +46,9 @@ describe('Daily Value and text', () => {
 describe('the day summary', () => {
   const S = { food: { totals: { iron_mg: 6, calcium_mg: 500 }, withData: 2, entries: 3 }, supplements: { totals: { iron_mg: 18, vit_d_mcg: 25 }, withData: 1, entries: 2 } }
   it('food only is the food bucket; food + supplements adds the known amounts and the counts', () => {
-    expect(pick(S, 'food')).toEqual({ totals: { iron_mg: 6, calcium_mg: 500 }, withData: 2, entries: 3, supplements: 0 })
-    expect(pick(S, 'all')).toEqual({ totals: { iron_mg: 24, calcium_mg: 500, vit_d_mcg: 25 }, withData: 3, entries: 5, supplements: 2 })
-    expect(pick(undefined, 'all')).toEqual({ totals: {}, withData: 0, entries: 0, supplements: 0 })
+    expect(pick(S, 'food')).toMatchObject({ totals: { iron_mg: 6, calcium_mg: 500 }, withData: 2, entries: 3, supplements: 0, marked: [] })
+    expect(pick(S, 'all')).toMatchObject({ totals: { iron_mg: 24, calcium_mg: 500, vit_d_mcg: 25 }, withData: 3, entries: 5, supplements: 2 })
+    expect(pick(undefined, 'all')).toMatchObject({ totals: {}, withData: 0, entries: 0, supplements: 0 })
   })
   it('coverage says how much of the day the numbers are based on', () => {
     expect(coverage({ withData: 6, entries: 9 })).toEqual({ withData: 6, entries: 9, none: false, partial: true })
@@ -86,5 +86,43 @@ describe('upper limit notes', () => {
   })
   it('the table has no upper limit for vitamin K, potassium, sodium, B1, B2, B12, B5, biotin, fibre', () => {
     for (const k of ['vit_k_mcg', 'potassium_mg', 'sodium_mg', 'b1_mg', 'b2_mg', 'b12_mcg', 'b5_mg', 'biotin_mcg', 'fiber_g']) expect(BY_KEY[k].ul).toBeUndefined()
+  })
+})
+
+describe('estimated micronutrients (USDA stand-ins)', () => {
+  const S = {
+    food: { totals: { iron_mg: 5 }, withData: 2, entries: 7, est: { totals: { iron_mg: 2, calcium_mg: 90 } }, groups: { labels: 2, estimated: 3, none: 2 } },
+    supplements: { totals: { vit_d_mcg: 25 }, withData: 1, entries: 1, est: { totals: {} }, groups: { labels: 1, estimated: 0, none: 0 } }
+  }
+  it('estimates are added only while included, and the nutrients they touched are marked', () => {
+    expect(pick(S, 'food', true)).toMatchObject({ totals: { iron_mg: 7, calcium_mg: 90 }, labelTotals: { iron_mg: 5 }, marked: ['iron_mg', 'calcium_mg'] })
+    expect(pick(S, 'food', false)).toMatchObject({ totals: { iron_mg: 5 }, marked: [] })
+    expect(pick(S, 'all', true).groups).toEqual({ labels: 3, estimated: 3, none: 2 })
+    expect(groupedRows({ iron_mg: 7 }, ['iron_mg'])[1].rows[0]).toMatchObject({ key: 'iron_mg', estimated: true })
+  })
+  it('three groups; the counted ones depend on the switch; an answer without groups is read as labels and none', () => {
+    expect(coverageGroups(pick(S, 'food', true))).toEqual({ entries: 7, labels: 2, estimated: 3, none: 2, counted: 5, nothing: false, left: false })
+    expect(coverageGroups(pick(S, 'food', false))).toMatchObject({ counted: 2, left: true })
+    expect(coverageGroups(pick({ food: { totals: {}, withData: 1, entries: 4 } }, 'food'))).toMatchObject({ labels: 1, estimated: 0, none: 3 })
+    expect(coverageGroups(pick(undefined, 'food'))).toBeNull()
+  })
+  it('the upper-limit note flags estimated values only when they are in the total it states', () => {
+    const z = { food: { totals: { zinc_mg: 38 }, est: { totals: { zinc_mg: 4 } } }, supplements: { totals: {} } }
+    expect(upperLimitNotes(z, 'en-US', true)).toMatchObject([{ key: 'zinc_mg', total: 42, estimated: true }])
+    expect(upperLimitNotes(z, 'en-US', false)).toEqual([])
+  })
+  it('canFill follows the server rule: vitamins or minerals of its own, an estimate already, supplements and nameless entries are left alone', () => {
+    expect(canFill({ name: 'x', meal: 'snack' })).toBe(true)
+    expect(canFill({ name: 'x', meal: 'snack', micros: { sodium_mg: 5, fiber_g: 1 } })).toBe(true)
+    expect(canFill({ name: 'x', meal: 'snack', micros: { calcium_mg: 5 } })).toBe(false)
+    expect(canFill({ name: 'x', meal: 'snack', microsEst: { micros: { iron_mg: 1 } } })).toBe(false)
+    expect(canFill({ name: 'x', meal: 'supplements' })).toBe(false)
+    expect(canFill({ name: ' ', meal: 'snack' })).toBe(false)
+  })
+  it('differences are worded: twice, half, more, less', () => {
+    expect(diffText({ key: 'fat_g', entry: 9, standin: 19, ratio: 2.11 })).toEqual({ how: 'about twice the', what: 'fat', numbers: '19 g', logged: '9 g' })
+    expect(diffText({ key: 'calories', entry: 200, standin: 90, ratio: 0.45 }).how).toBe('about half the')
+    expect(diffText({ key: 'carbs_g', entry: 10, standin: 40, ratio: 4 }).how).toBe('about 4 times the')
+    expect(diffText({ key: 'protein_g', entry: 0, standin: 8, ratio: null }).how).toBe('some')
   })
 })

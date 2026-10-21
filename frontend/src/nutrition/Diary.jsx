@@ -190,7 +190,7 @@ export default function Diary() {
 
     {day && status !== 'off' && <>
       <Summary totals={day.totals || EMPTY_TOTALS} goals={day.goals} health={day.health} eatBack={day.eatBack} onGoals={() => nav('/nutrition/goals')} onHealth={() => nav('/nutrition/health')} />
-      <MicrosCard micros={day.micros} />
+      <MicrosCard micros={day.micros} entries={day.entries || []} date={date} onChanged={load} />
       <ActivityCard activity={day.activity} unit={unit} />
       <WeightCard weight={weight} unit={unit} onSetup={() => nav('/nutrition/health')} />
       {status === 'error' && <div className="small" style={{ color: 'var(--red)', margin: '0 4px 10px' }}>{nt('Could not refresh: {0}', state.error)} <button className="linkbtn" onClick={load}>{nt('Try again')}</button></div>}

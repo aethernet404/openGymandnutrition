@@ -17,6 +17,7 @@ import { CONFIDENCE_LABEL, allowanceText, blankRow, draftRows, draftToEntries, e
 import { MEALS, MEAL_LABEL, findDuplicate, macroLine, savedFields, savedFoodBody, savedOverrides } from './diary.js'
 import { DuplicateChoice, MacroFields, SaveFoodFields } from './sheets.jsx'
 import { confirmSheet } from '../sheets.jsx'
+import { FillOption, openFillMicros } from './FillMicros.jsx'
 
 const toast = m => useUI.getState().toast(m)
 
@@ -42,6 +43,7 @@ function Review({ draft, date, initialMeal, onSaved, onDiscard, close }) {
   const [name, setName] = useState(draft.name || '')
   const [meal, setMeal] = useState(initialMeal)
   const [busy, setBusy] = useState(false)
+  const [fill, setFill] = useState(false)          // look up vitamins and minerals from USDA after saving (off unless ticked)
   const next = useRef(rows.length)
   const totals = rowsTotals(rows)
   const change = (i, patch) => setRows(rs => rs.map((r, j) => (j === i ? { ...r, ...patch } : r)))
@@ -84,6 +86,7 @@ function Review({ draft, date, initialMeal, onSaved, onDiscard, close }) {
       // Entries that were not also saved as a food are offered "save this for next time" on the diary.
       onSaved((out.entries || []).filter((_, i) => !savedIdx.has(i)))
       close()
+      if (fill) openFillMicros({ date, entries: out.entries || [], onDone: () => onSaved([]) })
       toast(failed.length ? nt('Saved to the diary, but “{0}” could not be saved as a food: {1}', failed[0].w.body.name, failed[0].message) : savedIdx.size ? nt('Saved to {0} and to My foods', nt(MEAL_LABEL[meal]).toLowerCase()) : nt('Saved to {0}', nt(MEAL_LABEL[meal]).toLowerCase()))
     } catch (e) { toast(e.message); setBusy(false) }
   }
@@ -116,6 +119,7 @@ function Review({ draft, date, initialMeal, onSaved, onDiscard, close }) {
 
     <div className="nut-preview" style={{ margin: '14px 0' }}><b>{totals.calories}</b> kcal<span className="muted"> · {macroLine(totals)}</span></div>
     <SelectRow title={nt('Meal')} sheetTitle={nt('Meal')} value={meal} onChange={setMeal} options={MEALS.map(m => ({ value: m, label: nt(MEAL_LABEL[m]) }))} />
+    <FillOption checked={fill} onChange={setFill} />
     <div style={{ height: 14 }} />
     <Button variant="primary" onClick={save} disabled={busy || !rows.length}>{nt('Save to diary')}</Button>
     <div style={{ height: 8 }} />
