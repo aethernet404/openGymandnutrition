@@ -37,8 +37,9 @@ const spawnAsCoach = ({ command, args, cwd, env, signal }) =>
   spawn(command, args, { cwd, env, signal, stdio: ['pipe', 'pipe', 'pipe'], ...(unprivilegedIds() || {}) });
 
 /** The prompt the SDK takes: a string, or (for an image) a one-message stream. */
-export function buildPrompt({ mode, image, imageFile, note, description, repair }) {
+export function buildPrompt({ mode, image, imageFile, note, description, repair, promptText }) {
   const tail = repair ? repairSuffix(repair.previous, repair.errors) : '';
+  if (promptText) return promptText + tail;          // a whole prompt written elsewhere (the USDA stand-in picker): text only
   if (mode === 'text') return textPrompt(description) + tail;
   if (mode === 'read') return photoPrompt(note) + `\n\nThe photo is the file ${imageFile} in the working directory. Read it with the Read tool, then answer.` + tail;
   // inline: one user message, image block first, as the vision docs recommend.
@@ -58,7 +59,7 @@ export function buildPrompt({ mode, image, imageFile, note, description, repair 
  * @param {string} [o.imageFile]   file name inside jobDir (read mode)
  * @returns adapter-shaped { code, text, stderr, timedOut, spawnError }
  */
-export async function invokeMeal({ mode, image, imageFile, note, description, repair, jobDir, env, model, timeoutMs, sdk }) {
+export async function invokeMeal({ mode, image, imageFile, note, description, repair, promptText, systemPrompt, jobDir, env, model, timeoutMs, sdk }) {
   const m = sdk || await import(PKG).catch(() => null);
   if (!m) return { code: -1, text: '', stderr: `${PKG} is not installed`, timedOut: false, spawnError: true };
 
@@ -81,7 +82,7 @@ export async function invokeMeal({ mode, image, imageFile, note, description, re
 
   try {
     for await (const message of m.query({
-      prompt: buildPrompt({ mode, image, imageFile, note, description, repair }),
+      prompt: buildPrompt({ mode, image, imageFile, note, description, repair, promptText }),
       options: {
         ...LOCKDOWN,
         ...(readOnlyHere || {}),
@@ -89,7 +90,7 @@ export async function invokeMeal({ mode, image, imageFile, note, description, re
         cwd: jobDir,
         env: { ...env, CLAUDE_AGENT_SDK_CLIENT_APP: 'opengym-nutrition' },
         model: model || undefined,
-        systemPrompt: SYSTEM_PROMPT,
+        systemPrompt: systemPrompt || SYSTEM_PROMPT,
         stderr: data => { if (stderr.length < OUTPUT_CAP) stderr += data; },
         spawnClaudeCodeProcess: spawnAsCoach
       }

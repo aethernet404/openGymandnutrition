@@ -138,6 +138,7 @@ const valueOf = (list, ids) => {
   return null;
 };
 const titleCase = s => (s === s.toUpperCase() && /[A-Z]{3}/.test(s) ? s.toLowerCase().replace(/(^|[\s(,/-])([a-z])/g, (_, a, b) => a + b.toUpperCase()) : s);
+export const USDA_DATATYPES = ['Foundation', 'SR Legacy', 'Survey (FNDDS)', 'Branded'];
 const USDA_KIND = { 'foundation': 'foundation', 'sr legacy': 'sr', 'branded': 'branded' };
 
 export function normaliseUsda(f) {
@@ -361,7 +362,59 @@ export function createLookup({
     }
   }
 
-  return { search, barcode, _cache: cache };
+  /* ----- stand-ins for the micronutrient fill-in (standin.js) -----
+     What this asks USDA, and nothing else: a food name (and a brand name, for the Branded dataset) and, later, an fdcId.
+     Reference datasets only unless there is a brand: Foundation, SR Legacy and Survey (FNDDS: the mixed dishes such as
+     taquitos and burritos). */
+  const STANDIN_REFERENCE = 'Foundation,SR Legacy,Survey (FNDDS)';
+  const queryOf = s => clean(String(s ?? '').replace(/[^\p{L}\p{N}\s'&,.-]/gu, ' '), 80);
+  const candidateOf = f => {
+    const id = Number(f?.fdcId);
+    const dataType = USDA_DATATYPES.find(t => t.toLowerCase() === String(f?.dataType || '').toLowerCase());
+    const name = titleCase(clean(f?.description, 120));
+    if (!Number.isInteger(id) || id < 1 || id > 1e9 || !dataType || !name) return null;
+    return { fdcId: id, name, dataType, ...(f.brandName || f.brandOwner ? { brand: titleCase(clean(f.brandName || f.brandOwner, 60)) } : {}) };
+  };
+
+  /** Up to `max` USDA foods that could stand in for a food of this name: reference foods first, then (with a brand) branded ones. */
+  async function usdaCandidates(name, brand, apiKey, { max = 8 } = {}) {
+    const q = queryOf(name);
+    if (q.length < 2) return [];
+    const b = queryOf(brand);
+    const key = 'usdac|' + q.toLowerCase() + '|' + b.toLowerCase();
+    const hit = recall(key); if (hit) return hit;
+    const deadline = now() + budgetMs;
+    const url = (query, types, size) => `${USDA_BASE()}/foods/search?` + new URLSearchParams({ api_key: apiKey, query, pageSize: String(size), dataType: types });
+    const take = r => (r.status === 'fulfilled' ? listOf('USDA FoodData Central', 'search', r.value, 'foods').map(candidateOf).filter(Boolean) : []);
+    const asks = [fetchRetry(url(q, STANDIN_REFERENCE, 10), deadline)];
+    if (b) asks.push(fetchRetry(url(`${b} ${q}`, 'Branded', 5), deadline));
+    const done = await Promise.allSettled(asks);
+    if (done.every(r => r.status === 'rejected')) throw done[0].reason;
+    const seen = new Set();
+    const out = [...take(done[0]).slice(0, b ? 6 : max), ...(done[1] ? take(done[1]) : [])].filter(c => !seen.has(c.fdcId) && seen.add(c.fdcId)).slice(0, max);
+    return remember(key, out, SEARCH_TTL);
+  }
+
+  /**
+   * One USDA food, per 100 g: its name, data type, calories and macros, and every micronutrient it states (micros.js units).
+   * null when USDA does not know that id or has no energy value for it. Public-domain data, so it is kept for an hour.
+   */
+  async function usdaFood(fdcId, apiKey) {
+    const id = Number(fdcId);
+    if (!Number.isInteger(id) || id < 1 || id > 1e9) return null;
+    const key = 'usdaf|' + id;
+    const hit = recall(key); if (hit) return hit;
+    const r = await fetchRetry(`${USDA_BASE()}/food/${id}?` + new URLSearchParams({ api_key: apiKey }), now() + budgetMs);
+    if (r.notFound) return remember(key, null, 5 * 60000);
+    if (!r.data || typeof r.data !== 'object' || Array.isArray(r.data)) { logShape('USDA FoodData Central', 'food', r.status, r.data, now); throw new LookupError('bad', 'unexpected shape'); }
+    const cand = candidateOf(r.data);
+    const n = normaliseUsda(r.data);
+    const b100 = n?.bases.find(x => x.label === '100 g');
+    if (!cand || !b100) return remember(key, null, 5 * 60000);
+    return remember(key, { ...cand, per100: b100.per, micros100: b100.micros || {} }, BARCODE_TTL);
+  }
+
+  return { search, barcode, usdaCandidates, usdaFood, _cache: cache };
 }
 
 /** A barcode as typed or scanned: digits only, 8–14 of them (EAN-8, UPC-A, EAN-13, GTIN-14). */

@@ -9,15 +9,22 @@ import * as cfg from './config.js';
 import * as store from './store.js';
 import * as v from './validate.js';
 import * as coachCfg from '../coach/config.js';
-import { createLookup, cleanBarcode } from './lookup.js';
+import { createLookup, cleanBarcode, describe as describeFailure, LookupError } from './lookup.js';
 import { createFatSecret, createUsage, SERVER_DAILY_CAP, USER_DAILY_CAP } from './fatsecret.js';
 import path from 'node:path';
 import * as health from './health.js';
 import * as hae from './hae.js';
 import * as haeDebug from './hae-debug.js';
-import { scaleMicros } from './micros.js';
+import { scaleMicros, microsOf } from './micros.js';
+import * as standin from './standin.js';
 import { createWindow, createBackoff } from '../rate-limit.js';
 import { createAnalyzer, availability, checkInput, FAILURES } from './analyze.js';
+
+/** Run `fn` over `list` with at most `n` in flight. */
+async function mapLimit(list, n, fn) {
+  let i = 0;
+  await Promise.all(Array.from({ length: Math.min(n, list.length) }, async () => { while (i < list.length) await fn(list[i++]); }));
+}
 
 const URL_BASE = 'http://x';
 const query = req => new URL(req.url, URL_BASE).searchParams;
@@ -465,6 +472,129 @@ export function nutritionRoutes({
         return aiFail(res, result.code, user.id, result.detail);
       }
       json(res, 200, { draft: result.draft, ms: result.ms, calls: result.calls, ai: allowance(user.id) });
+    }),
+
+    /* ----- Fill in micronutrients from USDA stand-ins. Nothing is saved until the person accepts (apply). -----
+       match: one AI call for the whole batch, only to pick which USDA food is the closest; every number comes from USDA. */
+
+    'POST /api/nutrition/micros/match': guarded(async (req, res, user) => {
+      const body = await readBody(req);
+      const date = dateOf(res, body?.date); if (!date) return;
+      const ids = Array.isArray(body?.ids) ? [...new Set(body.ids.map(x => String(x).slice(0, 40)))] : null;
+      if (!ids || !ids.length || ids.length > standin.MAX_BATCH) return fail(res, 400, `ids must list 1 to ${standin.MAX_BATCH} entries`);
+      const usdaKey = cfg.usdaKey();
+      if (!usdaKey) return json(res, 409, { error: 'Filling in micronutrients needs the USDA key (an admin adds it under Goals → Admin).', code: 'no-usda', ai: allowance(user.id) });
+      const limit = cfg.load().aiDailyCap;
+      if (limit === 0) return json(res, 403, { error: 'AI logging is switched off by an admin.', code: 'ai-off', ai: allowance(user.id) });
+      const avail = availability(user.id);
+      if (!avail.ok) return aiFail(res, avail.code, user.id);
+      if (throttled(res, user)) return;
+
+      const entries = store.read(user.id).days[date]?.entries || [];
+      const results = new Map();
+      const work = [];
+      for (const id of ids) {
+        const e = entries.find(x => x.id === id);
+        const why = standin.skipReason(e, { replace: body.replace === true });
+        if (why) results.set(id, { id, status: 'skipped', why });
+        else work.push({ key: 'e' + (work.length + 1), id, entry: e });
+      }
+      // USDA first (free): the candidates for each food. A food with none, or whose search failed, never reaches the model.
+      const usdaProblems = [];
+      await mapLimit(work, 3, async w => {
+        try { w.candidates = await lookup.usdaCandidates(w.entry.name, w.entry.brand, usdaKey); }
+        catch (e) { w.candidates = []; usdaProblems.push(e instanceof LookupError ? describeFailure('USDA FoodData Central', e) : 'USDA FoodData Central could not be reached.'); }
+      });
+      const asked = work.filter(w => w.candidates.length);
+      for (const w of work) if (!w.candidates.length) results.set(w.id, { id: w.id, status: 'none', reason: usdaProblems.length ? 'USDA could not be searched for this food.' : 'USDA has nothing like this food.', candidates: [] });
+      if (work.length && !asked.length && usdaProblems.length === work.length) return fail(res, 502, usdaProblems[0]);
+
+      let picks = new Map();
+      let ms = 0;
+      if (asked.length) {
+        const slot = await store.reserveAi(user.id, limit);         // one allowance for the whole batch
+        if (!slot.ok) return aiFail(res, 'cap', user.id);
+        const allowed = new Map(asked.map(w => [w.key, new Set(w.candidates.map(c => c.fdcId))]));
+        let r;
+        try { r = await analyzer.ask(user.id, { prompt: standin.buildPrompt(asked), systemPrompt: standin.SYSTEM, validate: standin.validateMatches(allowed) }); }
+        catch (e) { await store.refundAi(user.id); throw e; }
+        if (!r.ok) {
+          if (r.refund) await store.refundAi(user.id);        // the model never ran: nothing was spent
+          return aiFail(res, r.code, user.id, r.detail);
+        }
+        picks = r.result; ms = r.ms;
+      }
+      // Then the numbers, from USDA, for each pick.
+      await mapLimit(asked, 3, async w => {
+        const pick = picks.get(w.key);
+        const base = { id: w.id, candidates: w.candidates, reason: pick.reason };
+        if (pick.fdcId == null) { results.set(w.id, { ...base, status: 'none' }); return; }
+        try {
+          const food = await lookup.usdaFood(pick.fdcId, usdaKey);
+          results.set(w.id, food ? { ...base, status: 'match', confidence: pick.confidence, preview: standin.preview(w.entry, food) } : { ...base, status: 'none', reason: 'USDA no longer has that food.' });
+        } catch (e) { results.set(w.id, { ...base, status: 'none', reason: e instanceof LookupError ? describeFailure('USDA FoodData Central', e) : 'USDA could not be reached.' }); }
+      });
+      json(res, 200, { results: ids.map(id => results.get(id)), ms, ai: allowance(user.id) });
+    }),
+
+    // The numbers for one USDA food the person picked from the candidates (no AI, no allowance).
+    'POST /api/nutrition/micros/preview': guarded(async (req, res, user) => {
+      const body = await readBody(req);
+      const date = dateOf(res, body?.date); if (!date) return;
+      const id = String(body?.id || '').slice(0, 40);
+      const usdaKey = cfg.usdaKey();
+      if (!usdaKey) return json(res, 409, { error: 'Filling in micronutrients needs the USDA key.', code: 'no-usda' });
+      if (throttled(res, user)) return;
+      const e = (store.read(user.id).days[date]?.entries || []).find(x => x.id === id);
+      if (!e) return fail(res, 404, 'no such entry');
+      if (!Number.isInteger(body?.fdcId) || body.fdcId < 1) return fail(res, 400, 'fdcId must be a whole number');
+      try {
+        const food = await lookup.usdaFood(body.fdcId, usdaKey);
+        if (!food) return fail(res, 404, 'USDA has no such food');
+        json(res, 200, { preview: standin.preview(e, food) });
+      } catch (err) { fail(res, 502, err instanceof LookupError ? describeFailure('USDA FoodData Central', err) : 'USDA could not be reached.'); }
+    }),
+
+    // Accept (fdcId) or remove (remove: true) a stand-in. The numbers are fetched from USDA and scaled here, never taken from the client.
+    'POST /api/nutrition/micros/apply': guarded(async (req, res, user) => {
+      const body = await readBody(req);
+      const date = dateOf(res, body?.date); if (!date) return;
+      const id = String(body?.id || '').slice(0, 40);
+      if (body?.remove === true) {
+        const out = await store.mutate(user.id, d => {
+          const hit = store.findEntry(d, date, id);
+          if (!hit) return null;
+          delete hit.entry.microsEst;
+          return { entry: hit.entry, day: store.dayView(d, date) };
+        });
+        return out ? json(res, 200, out) : fail(res, 404, 'no such entry');
+      }
+      if (!Number.isInteger(body?.fdcId) || body.fdcId < 1) return fail(res, 400, 'fdcId must be a whole number');
+      const usdaKey = cfg.usdaKey();
+      if (!usdaKey) return json(res, 409, { error: 'Filling in micronutrients needs the USDA key.', code: 'no-usda' });
+      if (throttled(res, user)) return;
+      const e = (store.read(user.id).days[date]?.entries || []).find(x => x.id === id);
+      if (!e) return fail(res, 404, 'no such entry');
+      const why = standin.skipReason(e, { replace: true });
+      if (why === 'supplement' || why === 'has-data') return fail(res, 409, why === 'supplement' ? 'supplements are not estimated' : 'this entry already has its own vitamins and minerals');
+      let food;
+      try { food = await lookup.usdaFood(body.fdcId, usdaKey); }
+      catch (err) { return fail(res, 502, err instanceof LookupError ? describeFailure('USDA FoodData Central', err) : 'USDA could not be reached.'); }
+      if (!food) return fail(res, 404, 'USDA has no such food');
+      const p = standin.preview(e, food);
+      if (!p.ok) return fail(res, 422, p.why);
+      if (p.empty) return fail(res, 422, 'that USDA food has no vitamins or minerals to add');
+      const rec = standin.estimateRecord(e, p, body.confidence);
+      const checked = microsOf(rec.micros);
+      if (!checked.ok) return fail(res, 422, checked.error);
+      rec.micros = checked.value;
+      const out = await store.mutate(user.id, d => {
+        const hit = store.findEntry(d, date, id);
+        if (!hit) return null;
+        hit.entry.microsEst = rec;
+        return { entry: hit.entry, day: store.dayView(d, date) };
+      });
+      out ? json(res, 200, out) : fail(res, 404, 'no such entry');
     }),
 
     // Opt in or out of letting the Coach read a numbers-only summary (never writes anything).

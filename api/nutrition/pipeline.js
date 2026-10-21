@@ -11,7 +11,7 @@
 import { extractJSON } from '../coach/core/parse.js';
 import { validateMeal } from './meal.js';
 
-async function attempt(send, repair) {
+async function attempt(send, repair, validate) {
   const t0 = Date.now();
   const r = await send({ repair });
   const ms = Date.now() - t0;
@@ -26,19 +26,23 @@ async function attempt(send, repair) {
   }
   const parsed = extractJSON(r.text);
   if (parsed.error) return { ...base, ok: false, repairable: !repair, errors: [parsed.error], raw: r.text, errorClass: 'unusable' };
-  const checked = validateMeal(parsed.value);
+  const checked = validate(parsed.value);
   if (!checked.ok) return { ...base, ok: false, repairable: !repair, errors: checked.errors, raw: r.text, errorClass: 'unusable', parsed: parsed.value };
   return { ...base, ok: true, meal: checked.meal, parsed: parsed.value };
 }
 
-/** @returns {Promise<{ok:true, meal, attempts:number, ms:number[]} | {ok:false, errorClass, detail?, errors?, attempts:number, ms:number[]}>} */
-export async function runMealPipeline(send) {
+/**
+ * `validate` is validateMeal for a meal estimate; another answer (the micronutrient stand-in picks) passes its own,
+ * which must answer { ok:true, meal } or { ok:false, errors }.
+ * @returns {Promise<{ok:true, meal, attempts:number, ms:number[]} | {ok:false, errorClass, detail?, errors?, attempts:number, ms:number[]}>}
+ */
+export async function runMealPipeline(send, validate = validateMeal) {
   const ms = [];
-  let a = await attempt(send, null);
+  let a = await attempt(send, null, validate);
   ms.push(a.ms);
   let attempts = 1;
   if (!a.ok && a.repairable) {
-    a = await attempt(send, { previous: a.raw, errors: a.errors });
+    a = await attempt(send, { previous: a.raw, errors: a.errors }, validate);
     ms.push(a.ms); attempts = 2;
   }
   const { ms: _drop, repairable: _r, raw: _raw, ...rest } = a;

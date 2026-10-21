@@ -81,10 +81,11 @@ export function createAnalyzer({ invoke = invokeMeal, now = Date.now, budgetMs =
   let running = 0;
 
   /**
-   * @returns {Promise<{ok:true, draft:object, ms:number, calls:number} | {ok:false, code:string, refund:boolean, detail?:string}>}
-   * The caller has already reserved the allowance; `refund` says whether to give it back.
+   * Everything a model call needs around it, once: availability, one call per profile at a time, the credential
+   * binding, a scratch directory removed afterwards. `work` gets { jobDir, env, model, deadline } and answers the
+   * result; this wraps it with { ok:false, code, refund } when the call could not even start.
    */
-  async function analyze(uid, input) {
+  async function guarded(uid, work) {
     const a = availability(uid);
     if (!a.ok) return { ok: false, code: a.code, refund: true };
     if (busy.has(uid) || running >= MAX_CONCURRENT) return { ok: false, code: 'busy', refund: true };
@@ -99,17 +100,42 @@ export function createAnalyzer({ invoke = invokeMeal, now = Date.now, budgetMs =
       const cfg = coachCfg.load();
       const env = coachCfg.jobEnv(jobDir, a.cred);
       const model = coachCfg.modelFor(cfg);
-      const r = await runMealPipeline(({ repair }) => {
-        const left = deadline - now();
-        if (repair && left < MIN_REPAIR_MS) return { code: -1, text: '', stderr: '', timedOut: true, spawnError: false };
-        return invoke({ ...input, repair, jobDir, env, model, timeoutMs: left });
-      });
-      if (!r.ok) return { ok: false, code: r.errorClass, refund: FAILURES[r.errorClass]?.refund ?? false, detail: r.detail };
-      return { ok: true, draft: r.meal, ms: now() - t0, calls: r.attempts };
+      return await work({ jobDir, env, model, deadline, t0 });
     } finally {
       busy.delete(uid); running--;
       removeJobDir(jobDir);
     }
   }
-  return { analyze, _busy: busy };
+
+  const send = ({ jobDir, env, model, deadline }, input) => ({ repair }) => {
+    const left = deadline - now();
+    if (repair && left < MIN_REPAIR_MS) return { code: -1, text: '', stderr: '', timedOut: true, spawnError: false };
+    return invoke({ ...input, repair, jobDir, env, model, timeoutMs: left });
+  };
+
+  /**
+   * @returns {Promise<{ok:true, draft:object, ms:number, calls:number} | {ok:false, code:string, refund:boolean, detail?:string}>}
+   * The caller has already reserved the allowance; `refund` says whether to give it back.
+   */
+  function analyze(uid, input) {
+    return guarded(uid, async ctx => {
+      const r = await runMealPipeline(send(ctx, input));
+      if (!r.ok) return { ok: false, code: r.errorClass, refund: FAILURES[r.errorClass]?.refund ?? false, detail: r.detail };
+      return { ok: true, draft: r.meal, ms: now() - ctx.t0, calls: r.attempts };
+    });
+  }
+
+  /**
+   * A text-only question to the model whose answer `validate` checks (the USDA stand-in picks). Same lockdown, same
+   * credential, same refund rules as analyze(); `result` is whatever validate accepted.
+   * @returns {Promise<{ok:true, result:any, ms:number, calls:number} | {ok:false, code:string, refund:boolean, detail?:string}>}
+   */
+  function ask(uid, { prompt, systemPrompt, validate }) {
+    return guarded(uid, async ctx => {
+      const r = await runMealPipeline(send(ctx, { mode: 'text', promptText: prompt, systemPrompt }), validate);
+      if (!r.ok) return { ok: false, code: r.errorClass, refund: FAILURES[r.errorClass]?.refund ?? false, detail: r.detail };
+      return { ok: true, result: r.meal, ms: now() - ctx.t0, calls: r.attempts };
+    });
+  }
+  return { analyze, ask, _busy: busy };
 }

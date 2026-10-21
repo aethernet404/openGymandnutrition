@@ -102,18 +102,44 @@ export function scaleMicros(m, k) {
 }
 
 /**
+ * The amounts of an ACCEPTED USDA stand-in estimate (`entry.microsEst`, see standin.js) that apply to this entry now:
+ * scaled by how much the amount was edited since (entry.qty / the qty it was estimated at), and never a nutrient the
+ * entry already has from a label or a database. Missing = unknown.
+ */
+export function estMicrosOf(e) {
+  const est = e?.microsEst;
+  if (!est || typeof est !== 'object' || !hasMicros(est.micros)) return undefined;
+  const k = isNum(e.qty) && isNum(est.qty) && est.qty > 0 ? e.qty / est.qty : 1;
+  const scaled = scaleMicros(est.micros, k);
+  if (!scaled) return undefined;
+  const out = {};
+  for (const key of KEYS) if (isNum(scaled[key]) && !isNum(e.micros?.[key])) out[key] = scaled[key];
+  return hasMicros(out) ? out : undefined;
+}
+
+/**
  * Add up the known amounts of a list of entries (or foods). A nutrient is in the answer only if at least one entry knows it.
- * @returns {{ totals: Record<string, number>, withData: number, entries: number }}
+ * `totals` are the label / database amounts only. Amounts that come from accepted USDA stand-ins are kept apart in
+ * `est.totals` (only for nutrients the entry itself does not know), so the app can show them marked, or leave them out.
+ * `groups` counts every entry once: `estimated` (has an accepted stand-in), else `labels` (has its own data), else `none`.
+ * @returns {{ totals: Record<string, number>, withData: number, entries: number, est: { totals: Record<string, number> }, groups: { labels: number, estimated: number, none: number } }}
  */
 export function sumMicros(entries) {
   const totals = {};
+  const est = {};
+  const groups = { labels: 0, estimated: 0, none: 0 };
   let withData = 0;
   for (const e of entries) {
-    if (!hasMicros(e.micros)) continue;
-    withData++;
-    for (const key of KEYS) if (isNum(e.micros[key])) totals[key] = r4((totals[key] || 0) + e.micros[key]);
+    const real = hasMicros(e.micros);
+    const added = estMicrosOf(e);
+    if (real) {
+      withData++;
+      for (const key of KEYS) if (isNum(e.micros[key])) totals[key] = r4((totals[key] || 0) + e.micros[key]);
+    }
+    if (added) for (const key of Object.keys(added)) est[key] = r4((est[key] || 0) + added[key]);
+    if (added) groups.estimated++; else if (real) groups.labels++; else groups.none++;
   }
-  return { totals, withData, entries: entries.length };
+  return { totals, withData, entries: entries.length, est: { totals: est }, groups };
 }
 
 /* ------------------------------ conversions ------------------------------ */

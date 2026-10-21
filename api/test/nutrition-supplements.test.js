@@ -95,8 +95,8 @@ test('logging a supplement: meal "supplements", servings scale its micros, calor
   const day = add.out.day;
   assert.equal(day.totals.calories, 600, 'a 0 kcal supplement changes no calorie total');
   assert.equal(day.byMeal.supplements.calories, 0);
-  assert.deepEqual(day.micros.supplements, { totals: { vit_d_mcg: 50, iron_mg: 36, zinc_mg: 30, b12_mcg: 12 }, withData: 1, entries: 1 });
-  assert.deepEqual(day.micros.food, { totals: {}, withData: 0, entries: 1 }, 'food has one entry with no data: visible as such');
+  assert.deepEqual(day.micros.supplements, { totals: { vit_d_mcg: 50, iron_mg: 36, zinc_mg: 30, b12_mcg: 12 }, withData: 1, entries: 1, est: { totals: {} }, groups: { labels: 1, estimated: 0, none: 0 } });
+  assert.deepEqual(day.micros.food, { totals: {}, withData: 0, entries: 1, est: { totals: {} }, groups: { labels: 0, estimated: 0, none: 1 } }, 'food has one entry with no data: visible as such');
 });
 
 test('a gummy with calories counts them; a supplement typed in once (not saved) logs with its own numbers', async () => {
@@ -141,6 +141,6 @@ test('old data: a profile file with no stack, no types and no micros loads and a
   assert.deepEqual((await call('GET /api/nutrition/stack')).out.items, []);
   const day = (await call('GET /api/nutrition/day', { url: `/api/nutrition/day?date=${DAY}` })).out;
   assert.equal(day.entries.length, 1);
-  assert.deepEqual(day.micros.supplements, { totals: {}, withData: 0, entries: 0 });
+  assert.deepEqual(day.micros.supplements, { totals: {}, withData: 0, entries: 0, est: { totals: {} }, groups: { labels: 0, estimated: 0, none: 0 } });
   assert.equal(day.byMeal.supplements.calories, 0);
 });

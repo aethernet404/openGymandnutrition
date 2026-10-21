@@ -48,9 +48,9 @@ test('scaleMicros keeps only what is known; sumMicros never turns unknown into 0
   assert.equal(M.scaleMicros(undefined, 2), undefined);
   assert.equal(M.scaleMicros({ iron_mg: 1 }, -1), undefined);
   const s = M.sumMicros([{ micros: { iron_mg: 2, zinc_mg: 0 } }, { name: 'quick add, no data' }, { micros: { iron_mg: 1 } }, { micros: {} }]);
-  assert.deepEqual(s, { totals: { iron_mg: 3, zinc_mg: 0 }, withData: 2, entries: 4 });
+  assert.deepEqual(s, { totals: { iron_mg: 3, zinc_mg: 0 }, withData: 2, entries: 4, est: { totals: {} }, groups: { labels: 2, estimated: 0, none: 2 } });
   assert.ok(!('calcium_mg' in s.totals), 'nobody knows calcium: absent, not 0');
-  assert.deepEqual(M.sumMicros([]), { totals: {}, withData: 0, entries: 0 });
+  assert.deepEqual(M.sumMicros([]), { totals: {}, withData: 0, entries: 0, est: { totals: {} }, groups: { labels: 0, estimated: 0, none: 0 } });
 });
 
 /* ------------------------------ conversions ------------------------------ */
@@ -211,10 +211,10 @@ test('the day view: food and supplements are summed separately; coverage counts 
   await call('POST /api/nutrition/entries', { body: { date: DAY, meal: 'snack', source: 'food', qty: 2, food: snapshot({ ext: '2', name: 'Other', micros: { calcium_mg: 100, iron_mg: 2 } }) } });
   const v = (await call('GET /api/nutrition/day', { url: `/api/nutrition/day?date=${DAY}` })).out;
   assert.equal(v.entries.length, 3);
-  assert.deepEqual(v.micros.food, { totals: { calcium_mg: 520, vit_d_mcg: 3, zinc_mg: 0, iron_mg: 4 }, withData: 2, entries: 3 });
-  assert.deepEqual(v.micros.supplements, { totals: {}, withData: 0, entries: 0 });
+  assert.deepEqual(v.micros.food, { totals: { calcium_mg: 520, vit_d_mcg: 3, zinc_mg: 0, iron_mg: 4 }, withData: 2, entries: 3, est: { totals: {} }, groups: { labels: 2, estimated: 0, none: 1 } });
+  assert.deepEqual(v.micros.supplements, { totals: {}, withData: 0, entries: 0, est: { totals: {} }, groups: { labels: 0, estimated: 0, none: 0 } });
   const empty = (await call('GET /api/nutrition/day', { url: '/api/nutrition/day?date=2026-01-01' })).out;
-  assert.deepEqual(empty.micros.food, { totals: {}, withData: 0, entries: 0 });
+  assert.deepEqual(empty.micros.food, { totals: {}, withData: 0, entries: 0, est: { totals: {} }, groups: { labels: 0, estimated: 0, none: 0 } });
 });
 
 test('amount editing keeps micros per unit in the base (base.micros) and accepts the scaled micros', async () => {

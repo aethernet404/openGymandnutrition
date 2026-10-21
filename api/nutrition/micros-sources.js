@@ -74,7 +74,7 @@ export function microsFromUsda(list) {
     const row = byId.get(id);
     const v = num(row?.value ?? row?.amount);
     if (v == null || v < 0) continue;
-    const unit = String(row.unitName || row.nutrient?.unitName || usual).toUpperCase().replace('µ', 'U').replace('MCG', 'UG');
+    const unit = String(row.unitName || row.nutrient?.unitName || usual).replace(/[µμ]/g, 'u').toUpperCase().replace('MCG', 'UG');   // the detail endpoint writes µg (micro sign)
     const c = toCanonical(v, unit, key);
     if (c != null) out[key] = c;
   }
