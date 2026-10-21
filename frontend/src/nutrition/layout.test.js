@@ -69,6 +69,10 @@ describe('nutrition layout survives narrow screens and large text', () => {
     for (const sel of ['.nut-mm-btn', '.nut-mm', '.nut-mm-bar', '.nut-mm-bar>i']) expect(rule(sel), sel).not.toMatch(/transition|animation/)
     expect(rule('.nut-mm-bar')).not.toMatch(/(^|;)\s*width:/)
   })
+  it('the source-code note wraps and shrinks', () => {
+    expect(rule('.nut-source')).toMatch(/min-width:0/)
+    expect(rule('.nut-source')).toMatch(/overflow-wrap:anywhere/)
+  })
   it('the Micronutrients card and the More nutrients form section shrink and wrap; the bar never sets a width in CSS', () => {
     for (const sel of ['.nut-micros', '.nut-micros-b', '.nut-mgroup', '.nut-mrow', '.nut-more', '.nut-more-b']) expect(rule(sel), sel).toMatch(/min-width:0/)
     for (const sel of ['.nut-micros-h>span', '.nut-mrow-t>span', '.nut-cov', '.nut-munk', '.nut-mnote', '.nut-ul-notes', '.nut-more-note']) expect(rule(sel), sel).toMatch(/overflow-wrap:anywhere/)

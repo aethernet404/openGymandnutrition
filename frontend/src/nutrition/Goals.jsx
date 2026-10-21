@@ -6,6 +6,7 @@ import { useStore } from '../store/useStore.js'
 import { useUI } from '../store/useUI.js'
 import { nt } from './i18n.js'
 import * as nutri from './api.js'
+import { SOURCE_URL } from './source.js'
 import { goalsBody, kcalFromMacros } from './diary.js'
 import { MacroFields } from './sheets.jsx'
 import './nutrition.css'
@@ -215,5 +216,6 @@ export default function Goals() {
     {user?.admin && <UsdaKey />}
     {user?.admin && <FatSecretKeys />}
     {user?.admin && <HealthDebug />}
+    <div className="dim small nut-source">{nt('This version of openGym, with the nutrition tracker, is modified free software (AGPL v3).')} <a href={SOURCE_URL} target="_blank" rel="noopener noreferrer">{nt('Source code')}</a></div>
   </div>
 }

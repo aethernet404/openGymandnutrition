@@ -281,3 +281,5 @@
 .nut-mm-bar>i.m-carbs_g{background:var(--m-carbs)}
 .nut-mm-bar>i.m-fat_g{background:var(--m-fat)}
 .nut-mm-note{margin:8px 0 0;overflow-wrap:anywhere}
+
+.nut-source{margin:14px 4px 4px;overflow-wrap:anywhere;min-width:0}

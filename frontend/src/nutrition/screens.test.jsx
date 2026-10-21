@@ -1785,6 +1785,16 @@ describe('FatSecret in the app', () => {
     expect(text()).not.toContain('The settings file is damaged')
   })
 
+  it('the Goals page names this fork’s source code (AGPL), for every user, not only admins', async () => {
+    m.api.getGoals.mockResolvedValue({ goals: null })
+    m.api.getConfig.mockResolvedValue({ ai: {}, coach: { available: false } })
+    await mount(<Goals />)
+    const a = host.querySelector('.nut-source a')
+    expect(a.getAttribute('href')).toBe('https://github.com/aethernet404/openGymandnutrition')
+    expect(a.rel).toContain('noopener')
+    expect(host.querySelector('.nut-source').textContent).toContain('AGPL v3')
+  })
+
   it('FatSecret is not offered to a non-admin as a settings card', async () => {
     m.api.getGoals.mockResolvedValue({ goals: null })
     m.api.getConfig.mockResolvedValue({ ai: {}, coach: { available: false } })
