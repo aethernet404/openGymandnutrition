@@ -27,6 +27,7 @@ import { clean, round } from './validate.js';
 import { rankHits, dupKey, chooseServingGrams, servingLabel } from './rank.js';
 import { hasMicros, scaleMicros } from './micros.js';
 import { microsFromOff, microsFromUsda } from './micros-sources.js';
+import { TEXT as USDA_TEXT } from './usda-budget.js';
 
 const OFF_BASE = () => (process.env.NUTRITION_OFF_BASE || 'https://world.openfoodfacts.org').replace(/\/$/, '');
 const USDA_BASE = () => (process.env.NUTRITION_USDA_BASE || 'https://api.nal.usda.gov/fdc/v1').replace(/\/$/, '');
@@ -209,7 +210,8 @@ export function createLookup({
   fetch: fetchFn = globalThis.fetch, now = Date.now, sleep = ms => new Promise(r => setTimeout(r, ms)),
   timeoutMs = TIMEOUT_MS, retryTimeoutMs = Math.min(RETRY_TIMEOUT_MS, timeoutMs), retryDelayMs = RETRY_DELAY_MS,
   budgetMs = timeoutMs + retryTimeoutMs + 3000, userAgent = 'openGym-nutrition (self-hosted)',
-  fatsecret: fs = null           // fatsecret.js's client, injected so this file never imports it (it imports this one)
+  fatsecret: fs = null,          // fatsecret.js's client, injected so this file never imports it (it imports this one)
+  usdaBudget = null              // usda-budget.js: every request sent to USDA is counted against it
 } = {}) {
   const cache = new Map();
   const inflight = new Map();
@@ -240,6 +242,13 @@ export function createLookup({
       }
     }
     throw err;
+  }
+
+  /** A request to USDA, counted against the server's USDA budget first (a refusal is a 'limit' failure the person can read). */
+  function usdaFetch(url, deadline, uid) {
+    const over = usdaBudget?.take(uid);
+    if (over) return Promise.reject(new LookupError('limit', 'USDA budget: ' + over, USDA_TEXT[over]()));
+    return fetchRetry(url, deadline);
   }
 
   /** The `products`/`foods` array of an answer, or a LookupError('bad') (and a log line) if it is not one. */
@@ -277,7 +286,7 @@ export function createLookup({
     return remember(key, hits.slice(0, MAX_RESULTS), SEARCH_TTL);
   }
 
-  async function searchUsda(q, apiKey) {
+  async function searchUsda(q, apiKey, uid) {
     const key = 'usda|' + q.toLowerCase();
     const hit = recall(key); if (hit) return hit;
     const deadline = now() + budgetMs;
@@ -286,14 +295,16 @@ export function createLookup({
     // branded labels: the reference foods are asked for on their own.
     // Survey (FNDDS) — the mixed dishes (burritos, taquitos, pizza) — is a third request, ranked after the reference foods.
     const [generic, branded, survey] = await Promise.allSettled([
-      fetchRetry(url('Foundation,SR Legacy'), deadline),
-      fetchRetry(url('Branded'), deadline),
-      fetchRetry(url('Survey (FNDDS)'), deadline)
+      usdaFetch(url('Foundation,SR Legacy'), deadline, uid),
+      usdaFetch(url('Branded'), deadline, uid),
+      usdaFetch(url('Survey (FNDDS)'), deadline, uid)
     ]);
     if ([generic, branded, survey].every(r => r.status === 'rejected')) throw generic.reason;
     const take = r => (r.status === 'fulfilled' ? listOf('USDA FoodData Central', 'search', r.value, 'foods').map(normaliseUsda).filter(Boolean) : []);
     // A failure of only one of the two is shown as what it is: results from the other.
-    return remember(key, rankHits([...take(generic), ...take(survey), ...take(branded)], q).slice(0, MAX_RESULTS), SEARCH_TTL);
+    const out = rankHits([...take(generic), ...take(survey), ...take(branded)], q).slice(0, MAX_RESULTS);
+    // A search that lost one of its three requests (a budget, a timeout) is shown but not remembered: the next one asks again.
+    return [generic, branded, survey].some(r => r.status === 'rejected') ? out : remember(key, out, SEARCH_TTL);
   }
 
   async function searchFatSecret(q, creds, uid) {
@@ -327,7 +338,7 @@ export function createLookup({
     ));
     if (sources === 'all' || sources === 'off') run('off', 'Open Food Facts', () => once('off|' + q.toLowerCase(), () => searchOff(q)));
     if (sources === 'all' || sources === 'usda') {
-      if (usdaKey) run('usda', 'USDA FoodData Central', () => once('usda|' + q.toLowerCase(), () => searchUsda(q, usdaKey)));
+      if (usdaKey) run('usda', 'USDA FoodData Central', () => once('usda|' + q.toLowerCase(), () => searchUsda(q, usdaKey, uid)));
       else status.usda = { ok: false, skipped: 'no-key' };
     }
     if (sources === 'all' || sources === 'fatsecret') {
@@ -379,7 +390,7 @@ export function createLookup({
   };
 
   /** Up to `max` USDA foods that could stand in for a food of this name: reference foods first, then (with a brand) branded ones. */
-  async function usdaCandidates(name, brand, apiKey, { max = 8 } = {}) {
+  async function usdaCandidates(name, brand, apiKey, { max = 8, uid = null } = {}) {
     const q = queryOf(name);
     if (q.length < 2) return [];
     const b = queryOf(brand);
@@ -388,8 +399,8 @@ export function createLookup({
     const deadline = now() + budgetMs;
     const url = (query, types, size) => `${USDA_BASE()}/foods/search?` + new URLSearchParams({ api_key: apiKey, query, pageSize: String(size), dataType: types });
     const take = r => (r.status === 'fulfilled' ? listOf('USDA FoodData Central', 'search', r.value, 'foods').map(candidateOf).filter(Boolean) : []);
-    const asks = [fetchRetry(url(q, STANDIN_REFERENCE, 10), deadline)];
-    if (b) asks.push(fetchRetry(url(`${b} ${q}`, 'Branded', 5), deadline));
+    const asks = [usdaFetch(url(q, STANDIN_REFERENCE, 10), deadline, uid)];
+    if (b) asks.push(usdaFetch(url(`${b} ${q}`, 'Branded', 5), deadline, uid));
     const done = await Promise.allSettled(asks);
     if (done.every(r => r.status === 'rejected')) throw done[0].reason;
     const seen = new Set();
@@ -401,12 +412,12 @@ export function createLookup({
    * One USDA food, per 100 g: its name, data type, calories and macros, and every micronutrient it states (micros.js units).
    * null when USDA does not know that id or has no energy value for it. Public-domain data, so it is kept for an hour.
    */
-  async function usdaFood(fdcId, apiKey) {
+  async function usdaFood(fdcId, apiKey, { uid = null } = {}) {
     const id = Number(fdcId);
     if (!Number.isInteger(id) || id < 1 || id > 1e9) return null;
     const key = 'usdaf|' + id;
     const hit = recall(key); if (hit) return hit;
-    const r = await fetchRetry(`${USDA_BASE()}/food/${id}?` + new URLSearchParams({ api_key: apiKey }), now() + budgetMs);
+    const r = await usdaFetch(`${USDA_BASE()}/food/${id}?` + new URLSearchParams({ api_key: apiKey }), now() + budgetMs, uid);
     if (r.notFound) return remember(key, null, 5 * 60000);
     if (!r.data || typeof r.data !== 'object' || Array.isArray(r.data)) { logShape('USDA FoodData Central', 'food', r.status, r.data, now); throw new LookupError('bad', 'unexpected shape'); }
     const cand = candidateOf(r.data);

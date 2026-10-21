@@ -17,6 +17,7 @@ import * as hae from './hae.js';
 import * as haeDebug from './hae-debug.js';
 import { scaleMicros, microsOf } from './micros.js';
 import * as standin from './standin.js';
+import { createUsdaBudget } from './usda-budget.js';
 import { createWindow, createBackoff } from '../rate-limit.js';
 import { createAnalyzer, availability, checkInput, FAILURES } from './analyze.js';
 
@@ -26,6 +27,13 @@ async function mapLimit(list, n, fn) {
   await Promise.all(Array.from({ length: Math.min(n, list.length) }, async () => { while (i < list.length) await fn(list[i++]); }));
 }
 
+// How much JSON each kind of route may be sent (server.js's own ceiling is 5 MB for everything). A photo analysis is the
+// one large one: 3 MB of image is 4 MB as base64. Health Auto Export keeps the full ceiling: its payload grows with
+// the metrics the person chose and is only accepted behind a valid token.
+const BODY = { tiny: 4 * 1024, small: 32 * 1024, entries: 256 * 1024, photo: 4.5 * 1024 * 1024, hae: 5 * 1024 * 1024 };
+// Changes a profile may make per minute (a normal screen makes a handful; a batch of entries is one request).
+const WRITES_PER_MIN = () => { const n = Number(process.env.NUTRITION_WRITES_PER_MINUTE); return Number.isInteger(n) && n >= 1 ? n : 120; };
+
 const URL_BASE = 'http://x';
 const query = req => new URL(req.url, URL_BASE).searchParams;
 
@@ -33,7 +41,9 @@ export function nutritionRoutes({
   json, readBody, readSession, requireAdmin, analyzer = createAnalyzer(),
   // FatSecret's calls are budgeted per profile and per day for the whole server (fatsecret.js); the count survives restarts.
   fatsecret = createFatSecret({ usage: createUsage({ file: path.join(cfg.dataDir(), 'fatsecret-usage.json') }) }),
-  lookup = createLookup({ fatsecret }),
+  // USDA is one key for everyone: every request to it is counted per hour and per day (usda-budget.js).
+  usdaBudget = createUsdaBudget({ file: path.join(cfg.dataDir(), 'usda-usage.json') }),
+  lookup = createLookup({ fatsecret, usdaBudget }),
   // server.js supplies the address its sign-in throttle counts (proxy headers handled there) and whether a
   // profile still exists and is enabled; the defaults suit tests and a bare node run.
   limitAddress = req => String(req.socket?.remoteAddress || 'unknown'), userActive = () => true
@@ -44,6 +54,8 @@ export function nutritionRoutes({
   const perToken = createWindow({ max: 60, windowMs: 3600000 });
   // Lookups go out to third parties from this server's address, so they are budgeted per profile.
   const lookups = createWindow({ max: 40, windowMs: 60000 });
+  // Every change (POST, PUT, DELETE) is counted per profile: each one reads and rewrites the profile's whole file.
+  const writes = createWindow({ max: WRITES_PER_MIN(), windowMs: 60000 });
   const throttled = (res, user) => {
     const wait = lookups.take(user.id);
     if (wait) { json(res, 429, { error: 'too many lookups; wait a moment', code: 'rate' }, { 'Retry-After': String(wait) }); return true; }
@@ -63,6 +75,10 @@ export function nutritionRoutes({
   /** Run a handler body; turn the store's own errors into answers. */
   const guarded = fn => async (req, res) => {
     const user = guard(req, res); if (!user) return;
+    if (req.method !== 'GET') {
+      const wait = writes.take(user.id);
+      if (wait) return json(res, 429, { error: 'too many changes; wait a moment', code: 'rate', retryAfter: wait }, { 'Retry-After': String(wait) });
+    }
     try { await fn(req, res, user); }
     catch (e) {
       if (e instanceof store.NutritionDataError) return fail(res, 500, e.message);
@@ -156,7 +172,7 @@ export function nutritionRoutes({
 
     // Add one or several entries to a day. Body: { date, entries:[…] } or { date, …one entry }.
     'POST /api/nutrition/entries': guarded(async (req, res, user) => {
-      const body = await readBody(req);
+      const body = await readBody(req, BODY.entries);
       const date = dateOf(res, body?.date); if (!date) return;
       const raw = Array.isArray(body.entries) ? body.entries : [body];
       if (!raw.length || raw.length > v.LIMITS.entriesPerRequest) return fail(res, 400, `send between 1 and ${v.LIMITS.entriesPerRequest} entries`);
@@ -199,7 +215,7 @@ export function nutritionRoutes({
       const q = query(req);
       const date = dateOf(res, q.get('date')); if (!date) return;
       const id = idOf(res, q.get('id')); if (!id) return;
-      const body = await readBody(req);
+      const body = await readBody(req, BODY.small);
       const checked = v.entry(body, { partial: true });
       if (!checked.ok) return invalid(res, checked);
       let newDate = null;
@@ -233,7 +249,7 @@ export function nutritionRoutes({
     }),
 
     'POST /api/nutrition/foods': guarded(async (req, res, user) => {
-      const body = await readBody(req);
+      const body = await readBody(req, BODY.small);
       const checked = v.food(body);
       if (!checked.ok) return invalid(res, checked);
       // Saving something that may already be saved (an AI estimate turned into a food): with checkDuplicate the same
@@ -260,7 +276,7 @@ export function nutritionRoutes({
     // entries (meal 'supplements', each by foodId); this only remembers the selection.
     'GET /api/nutrition/stack': guarded(async (req, res, user) => { json(res, 200, { items: store.stackOf(store.read(user.id)) }); }),
     'PUT /api/nutrition/stack': guarded(async (req, res, user) => {
-      const body = await readBody(req);
+      const body = await readBody(req, BODY.small);
       const raw = body?.items;
       if (!Array.isArray(raw) || raw.length > v.LIMITS.stack) return fail(res, 400, `send a list of at most ${v.LIMITS.stack} supplements`);
       const items = [];
@@ -284,7 +300,7 @@ export function nutritionRoutes({
     // Edit a food (any of its fields), or just favourite it. Entries already logged keep their numbers.
     'PUT /api/nutrition/foods': guarded(async (req, res, user) => {
       const id = idOf(res, query(req).get('id')); if (!id) return;
-      const body = await readBody(req);
+      const body = await readBody(req, BODY.small);
       const checked = v.food(body, { partial: true });
       if (!checked.ok) return invalid(res, checked);
       const food = await store.mutate(user.id, d => {
@@ -353,7 +369,7 @@ export function nutritionRoutes({
     // the app's settings. It can write one day's numbers and read nothing.
     'POST /api/nutrition/health': async (req, res) => {
       const auth = ingestGate(req, res); if (!auth) return;
-      const checked = health.validateIngest(await readBody(req));
+      const checked = health.validateIngest(await readBody(req, BODY.small));
       if (!checked.ok) return json(res, 400, { error: checked.error, ...(checked.field ? { field: checked.field } : {}) });
       let out;
       try { out = await health.record(auth.uid, auth.id, checked.value); }
@@ -367,7 +383,7 @@ export function nutritionRoutes({
     // bounds as the route above, and replaces that day's numbers. Never adds to them.
     'POST /api/nutrition/health/hae': async (req, res) => {
       const auth = ingestGate(req, res); if (!auth) return;
-      const payload = await readBody(req);
+      const payload = await readBody(req, BODY.hae);
       const parsed = hae.parseHae(payload);
       const debugOn = cfg.load().healthDebug;
       if (!parsed.ok) {
@@ -450,7 +466,7 @@ export function nutritionRoutes({
 
     // "Eat back": off by default; adds a share of the day's active calories to the calorie goal.
     'PUT /api/nutrition/health/settings': guarded(async (req, res, user) => {
-      const eb = (await readBody(req))?.eatBack;
+      const eb = (await readBody(req, BODY.tiny))?.eatBack;
       if (!eb || typeof eb.enabled !== 'boolean' || !Number.isInteger(eb.percent) || eb.percent < 0 || eb.percent > 100) return fail(res, 400, 'eatBack must be { enabled: true|false, percent: a whole number from 0 to 100 }');
       json(res, 200, { eatBack: await health.setEatBack(user.id, eb) });
     }),
@@ -458,7 +474,7 @@ export function nutritionRoutes({
     /* ----- AI logging: a draft only. Nothing is saved until the person confirms it (POST /entries) ----- */
 
     'POST /api/nutrition/analyze': guarded(async (req, res, user) => {
-      const input = checkInput(await readBody(req));
+      const input = checkInput(await readBody(req, BODY.photo));
       if (!input.ok) return fail(res, 400, input.error);
       const limit = cfg.load().aiDailyCap;
       if (limit === 0) return json(res, 403, { error: 'AI logging is switched off by an admin.', code: 'ai-off', ai: allowance(user.id) });
@@ -480,7 +496,7 @@ export function nutritionRoutes({
        match: one AI call for the whole batch, only to pick which USDA food is the closest; every number comes from USDA. */
 
     'POST /api/nutrition/micros/match': guarded(async (req, res, user) => {
-      const body = await readBody(req);
+      const body = await readBody(req, BODY.small);
       const date = dateOf(res, body?.date); if (!date) return;
       const ids = Array.isArray(body?.ids) && body.ids.every(v.validId) ? [...new Set(body.ids)] : null;
       if (!ids || !ids.length || ids.length > standin.MAX_BATCH) return fail(res, 400, `ids must list 1 to ${standin.MAX_BATCH} entries`);
@@ -501,38 +517,49 @@ export function nutritionRoutes({
         if (why) results.set(id, { id, status: 'skipped', why });
         else work.push({ key: 'e' + (work.length + 1), id, entry: e });
       }
-      // USDA first (free): the candidates for each food. A food with none, or whose search failed, never reaches the model.
-      const usdaProblems = [];
-      await mapLimit(work, 3, async w => {
-        try { w.candidates = await lookup.usdaCandidates(w.entry.name, w.entry.brand, usdaKey); }
-        catch (e) { w.candidates = []; usdaProblems.push(e instanceof LookupError ? describeFailure('USDA FoodData Central', e) : 'USDA FoodData Central could not be reached.'); }
-      });
-      const asked = work.filter(w => w.candidates.length);
-      for (const w of work) if (!w.candidates.length) results.set(w.id, { id: w.id, status: 'none', reason: usdaProblems.length ? 'USDA could not be searched for this food.' : 'USDA has nothing like this food.', candidates: [] });
-      if (work.length && !asked.length && usdaProblems.length === work.length) return fail(res, 502, usdaProblems[0]);
+      if (!work.length) return json(res, 200, { results: ids.map(id => results.get(id)), ms: 0, ai: allowance(user.id) });
 
+      // The allowance is reserved BEFORE USDA is asked, so a caller cannot use the shared USDA key for free by never
+      // reaching the model. It is given back when nothing was asked of the model (USDA found nothing, or could not be
+      // searched) and when the model never ran; it stays spent once the model has run.
+      const slot = await store.reserveAi(user.id, limit);
+      if (!slot.ok) return aiFail(res, 'cap', user.id);
+      let reserved = true;
+      const giveBack = async () => { if (reserved) { reserved = false; await store.refundAi(user.id); } };
       let picks = new Map();
       let ms = 0;
-      if (asked.length) {
-        const slot = await store.reserveAi(user.id, limit);         // one allowance for the whole batch
-        if (!slot.ok) return aiFail(res, 'cap', user.id);
-        const allowed = new Map(asked.map(w => [w.key, new Set(w.candidates.map(c => c.fdcId))]));
-        let r;
-        try { r = await analyzer.ask(user.id, { prompt: standin.buildPrompt(asked), systemPrompt: standin.SYSTEM, validate: standin.validateMatches(allowed) }); }
-        catch (e) { await store.refundAi(user.id); throw e; }
-        if (!r.ok) {
-          if (r.refund) await store.refundAi(user.id);        // the model never ran: nothing was spent
-          return aiFail(res, r.code, user.id, r.detail);
+      let asked = [];
+      try {
+        // The candidates for each food. A food with none, or whose search failed, never reaches the model.
+        const usdaProblems = [];
+        await mapLimit(work, 3, async w => {
+          try { w.candidates = await lookup.usdaCandidates(w.entry.name, w.entry.brand, usdaKey, { uid: user.id }); }
+          catch (e) { w.candidates = []; usdaProblems.push(e instanceof LookupError ? describeFailure('USDA FoodData Central', e) : 'USDA FoodData Central could not be reached.'); }
+        });
+        asked = work.filter(w => w.candidates.length);
+        for (const w of work) if (!w.candidates.length) results.set(w.id, { id: w.id, status: 'none', reason: usdaProblems.length ? 'USDA could not be searched for this food.' : 'USDA has nothing like this food.', candidates: [] });
+        if (!asked.length) {
+          await giveBack();
+          if (usdaProblems.length === work.length) return fail(res, 502, usdaProblems[0]);
+        } else {
+          const allowed = new Map(asked.map(w => [w.key, new Set(w.candidates.map(c => c.fdcId))]));
+          const r = await analyzer.ask(user.id, { prompt: standin.buildPrompt(asked), systemPrompt: standin.SYSTEM, validate: standin.validateMatches(allowed) });
+          if (!r.ok) {
+            if (r.refund) await giveBack();                     // the model never ran: nothing was spent
+            else reserved = false;                              // it ran (timeout, unreadable answer): spent
+            return aiFail(res, r.code, user.id, r.detail);
+          }
+          reserved = false;
+          picks = r.result; ms = r.ms;
         }
-        picks = r.result; ms = r.ms;
-      }
+      } catch (e) { await giveBack(); throw e; }
       // Then the numbers, from USDA, for each pick.
       await mapLimit(asked, 3, async w => {
         const pick = picks.get(w.key);
         const base = { id: w.id, candidates: w.candidates, reason: pick.reason };
         if (pick.fdcId == null) { results.set(w.id, { ...base, status: 'none' }); return; }
         try {
-          const food = await lookup.usdaFood(pick.fdcId, usdaKey);
+          const food = await lookup.usdaFood(pick.fdcId, usdaKey, { uid: user.id });
           results.set(w.id, food ? { ...base, status: 'match', confidence: pick.confidence, preview: standin.preview(w.entry, food) } : { ...base, status: 'none', reason: 'USDA no longer has that food.' });
         } catch (e) { results.set(w.id, { ...base, status: 'none', reason: e instanceof LookupError ? describeFailure('USDA FoodData Central', e) : 'USDA could not be reached.' }); }
       });
@@ -541,7 +568,7 @@ export function nutritionRoutes({
 
     // The numbers for one USDA food the person picked from the candidates (no AI, no allowance).
     'POST /api/nutrition/micros/preview': guarded(async (req, res, user) => {
-      const body = await readBody(req);
+      const body = await readBody(req, BODY.tiny);
       const date = dateOf(res, body?.date); if (!date) return;
       const id = idOf(res, body?.id); if (!id) return;
       const usdaKey = cfg.usdaKey();
@@ -551,7 +578,7 @@ export function nutritionRoutes({
       if (!e) return fail(res, 404, 'no such entry');
       if (!Number.isInteger(body?.fdcId) || body.fdcId < 1) return fail(res, 400, 'fdcId must be a whole number');
       try {
-        const food = await lookup.usdaFood(body.fdcId, usdaKey);
+        const food = await lookup.usdaFood(body.fdcId, usdaKey, { uid: user.id });
         if (!food) return fail(res, 404, 'USDA has no such food');
         json(res, 200, { preview: standin.preview(e, food) });
       } catch (err) { fail(res, 502, err instanceof LookupError ? describeFailure('USDA FoodData Central', err) : 'USDA could not be reached.'); }
@@ -559,7 +586,7 @@ export function nutritionRoutes({
 
     // Accept (fdcId) or remove (remove: true) a stand-in. The numbers are fetched from USDA and scaled here, never taken from the client.
     'POST /api/nutrition/micros/apply': guarded(async (req, res, user) => {
-      const body = await readBody(req);
+      const body = await readBody(req, BODY.tiny);
       const date = dateOf(res, body?.date); if (!date) return;
       const id = idOf(res, body?.id); if (!id) return;
       if (body?.remove === true) {
@@ -601,7 +628,7 @@ export function nutritionRoutes({
 
     // Opt in or out of letting the Coach read a numbers-only summary (never writes anything).
     'PUT /api/nutrition/coach-share': guarded(async (req, res, user) => {
-      const body = await readBody(req);
+      const body = await readBody(req, BODY.tiny);
       if (typeof body?.share !== 'boolean') return fail(res, 400, 'share must be true or false');
       await store.mutate(user.id, d => { d.coachShare = body.share; });
       json(res, 200, { share: body.share });
@@ -612,7 +639,7 @@ export function nutritionRoutes({
     }),
 
     'PUT /api/nutrition/goals': guarded(async (req, res, user) => {
-      const checked = v.goals(await readBody(req));
+      const checked = v.goals(await readBody(req, BODY.tiny));
       if (!checked.ok) return invalid(res, checked);
       const goals = await store.mutate(user.id, d => (d.goals = Object.values(checked.value).some(x => x != null) ? checked.value : null));
       json(res, 200, { goals });
@@ -622,17 +649,17 @@ export function nutritionRoutes({
 
     'GET /api/admin/nutrition': async (req, res) => {
       if (!requireAdmin(req, res)) return;
-      json(res, 200, { ...cfg.load(), usdaKeyHint: cfg.usdaKeyHint(), fatsecretIdHint: cfg.fatsecretIdHint(), fatsecretUsage: fatsecret.usage?.snapshot?.() ?? null, fatsecretLast: fatsecret.status?.().lastError ?? null, aiCapMax: cfg.AI_CAP_MAX, aiCapDefault: cfg.AI_CAP_DEFAULT });
+      json(res, 200, { ...cfg.load(), usdaKeyHint: cfg.usdaKeyHint(), fatsecretIdHint: cfg.fatsecretIdHint(), fatsecretUsage: fatsecret.usage?.snapshot?.() ?? null, usdaUsage: usdaBudget.snapshot(), fatsecretLast: fatsecret.status?.().lastError ?? null, aiCapMax: cfg.AI_CAP_MAX, aiCapDefault: cfg.AI_CAP_DEFAULT });
     },
 
     'PUT /api/admin/nutrition': async (req, res) => {
       if (!requireAdmin(req, res)) return;
-      const body = await readBody(req);
+      const body = await readBody(req, BODY.small);
       const r = cfg.save(body);
       if (!r.ok) return fail(res, 400, r.error);
       if (body && typeof body === 'object' && body.fatsecret !== undefined) fatsecret.forget();     // a new pair starts with no cached token or results
       if (!r.config.healthDebug) haeDebug.clear();
-      json(res, 200, { ...r.config, usdaKeyHint: cfg.usdaKeyHint(), fatsecretIdHint: cfg.fatsecretIdHint(), fatsecretUsage: fatsecret.usage?.snapshot?.() ?? null, fatsecretLast: fatsecret.status?.().lastError ?? null, aiCapMax: cfg.AI_CAP_MAX, aiCapDefault: cfg.AI_CAP_DEFAULT });
+      json(res, 200, { ...r.config, usdaKeyHint: cfg.usdaKeyHint(), fatsecretIdHint: cfg.fatsecretIdHint(), fatsecretUsage: fatsecret.usage?.snapshot?.() ?? null, usdaUsage: usdaBudget.snapshot(), fatsecretLast: fatsecret.status?.().lastError ?? null, aiCapMax: cfg.AI_CAP_MAX, aiCapDefault: cfg.AI_CAP_DEFAULT });
     },
 
     // Checks the stored FatSecret keys: a token (and the scopes it grants), then one tiny search. Not counted against the daily

@@ -429,3 +429,27 @@ test('FatSecret through the real server: keys saved encrypted, token + search wi
   assert.ok(!h.log.includes(SECRET) && !h.log.includes('tok-') && !h.log.includes('198.51.100.7') && !h.log.includes('burrito'), 'no key, token, address or query in the log');
   assert.equal(h.log.split('\n').filter(l => /^\s+at /.test(l)).length, 0);
 });
+
+test('body size caps on the nutrition routes, through the real server: small routes refuse a big body with 413; a photo and Health Auto Export keep room', async t => {
+  const h = await boot(t);
+  const big = n => ({ pad: 'x'.repeat(n) });
+  const post = (method, p, body) => h.call(method, p, USER, body);
+  // Ordinary JSON routes: a few KB is plenty.
+  assert.equal((await post('PUT', '/api/nutrition/goals', big(6 * 1024))).status, 413, 'goals');
+  assert.equal((await post('PUT', '/api/nutrition/coach-share', big(6 * 1024))).status, 413, 'coach-share');
+  assert.equal((await post('POST', '/api/nutrition/micros/apply', big(6 * 1024))).status, 413, 'micros/apply');
+  assert.equal((await post('POST', '/api/nutrition/foods', big(40 * 1024))).status, 413, 'foods');
+  assert.equal((await post('PUT', '/api/nutrition/stack', big(40 * 1024))).status, 413, 'stack');
+  assert.equal((await post('PUT', '/api/nutrition/entries?date=2026-10-12&id=abc', big(40 * 1024))).status, 413, 'entry edit');
+  assert.equal((await post('POST', '/api/nutrition/entries', big(300 * 1024))).status, 413, 'entries');
+  assert.equal((await h.call('PUT', '/api/admin/nutrition', ADMIN, big(40 * 1024))).status, 413, 'admin settings');
+  // Within the cap the route answers for itself (here a validation error, not 413).
+  assert.equal((await post('PUT', '/api/nutrition/goals', { calories: 2000, protein_g: null, carbs_g: null, fat_g: null })).status, 200);
+  assert.equal((await post('POST', '/api/nutrition/entries', { date: '2026-10-12', entries: [{ name: 'x', meal: 'snack', calories: 1, protein_g: 0, carbs_g: 0, fat_g: 0, note: 'y'.repeat(100) }] })).status, 201);
+  // A photo is the big one: 3 MB of image is 4 MB as base64, so 4 MB gets an answer about the photo, not a 413.
+  const photo = await post('POST', '/api/nutrition/analyze', { kind: 'photo', image: 'A'.repeat(4 * 1024 * 1024) });
+  assert.notEqual(photo.status, 413);
+  assert.equal((await post('POST', '/api/nutrition/analyze', { kind: 'photo', image: 'A'.repeat(4.6 * 1024 * 1024) })).status, 413);
+  // The server's own ceiling still holds everywhere else.
+  assert.equal((await h.call('POST', '/api/nutrition/health/hae', null, {})).status, 401, 'the token gate comes before the body');
+});

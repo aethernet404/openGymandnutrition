@@ -733,7 +733,7 @@ function json(res, code, obj, extraHeaders) {
 class HttpError extends Error {
   constructor(status, message) { super(message); this.status = status; }
 }
-function readBody(req) {
+function readBody(req, limit = MAX_BODY) {      // `limit`: a route that expects less (nutrition) says so
   return new Promise((resolve, reject) => {
     let size = 0, over = false; const chunks = [];
     req.on('data', d => {
@@ -745,10 +745,10 @@ function readBody(req) {
         // reset before it has parsed the answer reports a dropped connection instead of the
         // 413. A client that keeps streaming past twice the cap is not a mistaken one, and is
         // cut off.
-        if (size > 2 * MAX_BODY) req.destroy();
+        if (size > 2 * limit) req.destroy();
         return;
       }
-      if (size > MAX_BODY) {
+      if (size > limit) {
         over = true; chunks.length = 0;
         reject(new HttpError(413, 'body too large'));
         return;

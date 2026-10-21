@@ -67,7 +67,18 @@ export function read(uid) {
 
 function write(uid, d) {
   fs.mkdirSync(dataDir(), { recursive: true, mode: 0o700 });
-  atomicWrite(fileFor(uid), JSON.stringify(d), 0o600);
+  const text = JSON.stringify(d);
+  // Nothing is written (and so nothing the change did is kept) when the profile would pass its size limit.
+  if (text.length > LIMITS.fileBytes) throw new NutritionLimitError('your nutrition data is too large to add to; delete some old days first');
+  atomicWrite(fileFor(uid), text, 0o600);
+}
+
+/** A new day may only be opened while the profile is within its limits on days and entries. */
+function checkRoom(d, date, adding) {
+  if (!d.days[date] && Object.keys(d.days).length >= LIMITS.days) throw new NutritionLimitError(`a profile can hold at most ${LIMITS.days} days of data; delete some old days first`);
+  let n = 0;
+  for (const k of Object.keys(d.days)) n += d.days[k]?.entries?.length || 0;
+  if (n + adding > LIMITS.entriesTotal) throw new NutritionLimitError(`a profile can hold at most ${LIMITS.entriesTotal} entries; delete some old ones first`);
 }
 
 /** Read, let `fn` change the data, write it back. `fn` may return a value, which is returned. */
@@ -242,6 +253,7 @@ export function listFoods(d, { scope = 'all', q = '', type = null } = {}) {
 /* ---------- entries ---------- */
 
 export function addEntries(d, date, list) {
+  checkRoom(d, date, list.length);
   const day = (d.days[date] ||= { entries: [] });
   if (day.entries.length + list.length > LIMITS.entriesPerDay) throw new NutritionLimitError(`a day can hold at most ${LIMITS.entriesPerDay} entries`);
   const supplements = day.entries.filter(e => e.meal === 'supplements').length + list.filter(e => e.meal === 'supplements').length;
@@ -266,6 +278,7 @@ export function updateEntry(d, date, id, patch, newDate) {
   if (next.base == null) delete next.base;
   if (next.micros == null) delete next.micros;
   if (newDate && newDate !== date) {
+    if (!d.days[newDate]) checkRoom(d, newDate, 0);
     const target = (d.days[newDate] ||= { entries: [] });
     if (target.entries.length >= LIMITS.entriesPerDay) throw new NutritionLimitError(`a day can hold at most ${LIMITS.entriesPerDay} entries`);
     hit.day.entries.splice(hit.i, 1);

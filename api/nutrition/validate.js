@@ -23,6 +23,8 @@ export const LIMITS = {
   qty: 1000, grams: 100000,
   name: 120, brand: 60, serving: 60, ext: 40,
   entriesPerDay: 200, entriesPerRequest: 30,
+  // What one profile may hold, so that a client in a loop cannot grow its file (rewritten whole on every change) without end.
+  days: 3660, entriesTotal: 50000, fileBytes: 15 * 1024 * 1024,
   foods: 2000, recentFoods: 300,
   rangeDays: 400,
   supplementsPerDay: 40, savedSupplements: 200, stack: 30
