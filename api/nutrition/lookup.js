@@ -229,12 +229,12 @@ export function createLookup({
   const headers = { 'User-Agent': userAgent, Accept: 'application/json' };
 
   /** One request, retried once if the source timed out, errored or sent rubbish; inside `deadline`. */
-  async function fetchRetry(url, deadline) {
+  async function fetchRetry(url, deadline, extraHeaders = null) {
     let err;
     for (let n = 0; n < 2; n++) {
       const left = deadline - now();
       if (n > 0 && left < 1500) break;
-      try { return { ...(await getJson(fetchFn, url, { headers, timeoutMs: Math.max(200, Math.min(n === 0 ? timeoutMs : retryTimeoutMs, left)) })), retried: n }; }
+      try { return { ...(await getJson(fetchFn, url, { headers: extraHeaders ? { ...headers, ...extraHeaders } : headers, timeoutMs: Math.max(200, Math.min(n === 0 ? timeoutMs : retryTimeoutMs, left)) })), retried: n }; }
       catch (e) {
         err = e instanceof LookupError ? e : new LookupError('down', String(e));
         if (!RETRYABLE.has(err.kind)) break;
@@ -244,11 +244,29 @@ export function createLookup({
     throw err;
   }
 
-  /** A request to USDA, counted against the server's USDA budget first (a refusal is a 'limit' failure the person can read). */
-  function usdaFetch(url, deadline, uid) {
+  /**
+   * A request to USDA, counted against the server's USDA budget first (a refusal is a 'limit' failure the person can read).
+   * The key travels in the X-Api-Key header, not in the URL, so it cannot end up in a proxy or access log that records URLs.
+   * (USDA's FoodData Central sits behind api.data.gov, which takes the key as a header or as `api_key`; the header could not be
+   * checked against their pages when this was written. If USDA refuses a header key, the same request is repeated once with
+   * `api_key` in the URL, and if that is accepted the server keeps using the URL form and logs one line saying so.)
+   */
+  let usdaKeyInUrl = false;
+  let keyBadUntil = 0;                 // both forms were refused a moment ago: the key itself is bad, do not try the second form each time
+  async function usdaFetch(url, deadline, uid, apiKey) {
     const over = usdaBudget?.take(uid);
-    if (over) return Promise.reject(new LookupError('limit', 'USDA budget: ' + over, USDA_TEXT[over]()));
-    return fetchRetry(url, deadline);
+    if (over) throw new LookupError('limit', 'USDA budget: ' + over, USDA_TEXT[over]());
+    const withKey = u => u + (u.includes('?') ? '&' : '?') + new URLSearchParams({ api_key: apiKey });
+    if (usdaKeyInUrl) return fetchRetry(withKey(url), deadline);
+    try { return await fetchRetry(url, deadline, { 'X-Api-Key': apiKey }); }
+    catch (e) {
+      if (!(e instanceof LookupError) || e.kind !== 'auth' || now() < keyBadUntil) throw e;
+      let r;
+      try { r = await fetchRetry(withKey(url), deadline); }        // a bad key fails again here, and says so
+      catch (e2) { if (e2 instanceof LookupError && e2.kind === 'auth') keyBadUntil = now() + 10 * 60000; throw e2; }
+      if (!usdaKeyInUrl) { usdaKeyInUrl = true; console.error('nutrition: USDA did not accept the key in the X-Api-Key header; using the api_key parameter instead'); }
+      return r;
+    }
   }
 
   /** The `products`/`foods` array of an answer, or a LookupError('bad') (and a log line) if it is not one. */
@@ -290,14 +308,14 @@ export function createLookup({
     const key = 'usda|' + q.toLowerCase();
     const hit = recall(key); if (hit) return hit;
     const deadline = now() + budgetMs;
-    const url = types => `${USDA_BASE()}/foods/search?` + new URLSearchParams({ api_key: apiKey, query: q, pageSize: '25', dataType: types });
+    const url = types => `${USDA_BASE()}/foods/search?` + new URLSearchParams({ query: q, pageSize: '25', dataType: types });
     // Two requests, so that the plain reference foods are never crowded out by the thousands of
     // branded labels: the reference foods are asked for on their own.
     // Survey (FNDDS) — the mixed dishes (burritos, taquitos, pizza) — is a third request, ranked after the reference foods.
     const [generic, branded, survey] = await Promise.allSettled([
-      usdaFetch(url('Foundation,SR Legacy'), deadline, uid),
-      usdaFetch(url('Branded'), deadline, uid),
-      usdaFetch(url('Survey (FNDDS)'), deadline, uid)
+      usdaFetch(url('Foundation,SR Legacy'), deadline, uid, apiKey),
+      usdaFetch(url('Branded'), deadline, uid, apiKey),
+      usdaFetch(url('Survey (FNDDS)'), deadline, uid, apiKey)
     ]);
     if ([generic, branded, survey].every(r => r.status === 'rejected')) throw generic.reason;
     const take = r => (r.status === 'fulfilled' ? listOf('USDA FoodData Central', 'search', r.value, 'foods').map(normaliseUsda).filter(Boolean) : []);
@@ -397,10 +415,10 @@ export function createLookup({
     const key = 'usdac|' + q.toLowerCase() + '|' + b.toLowerCase();
     const hit = recall(key); if (hit) return hit;
     const deadline = now() + budgetMs;
-    const url = (query, types, size) => `${USDA_BASE()}/foods/search?` + new URLSearchParams({ api_key: apiKey, query, pageSize: String(size), dataType: types });
+    const url = (query, types, size) => `${USDA_BASE()}/foods/search?` + new URLSearchParams({ query, pageSize: String(size), dataType: types });
     const take = r => (r.status === 'fulfilled' ? listOf('USDA FoodData Central', 'search', r.value, 'foods').map(candidateOf).filter(Boolean) : []);
-    const asks = [usdaFetch(url(q, STANDIN_REFERENCE, 10), deadline, uid)];
-    if (b) asks.push(usdaFetch(url(`${b} ${q}`, 'Branded', 5), deadline, uid));
+    const asks = [usdaFetch(url(q, STANDIN_REFERENCE, 10), deadline, uid, apiKey)];
+    if (b) asks.push(usdaFetch(url(`${b} ${q}`, 'Branded', 5), deadline, uid, apiKey));
     const done = await Promise.allSettled(asks);
     if (done.every(r => r.status === 'rejected')) throw done[0].reason;
     const seen = new Set();
@@ -417,7 +435,7 @@ export function createLookup({
     if (!Number.isInteger(id) || id < 1 || id > 1e9) return null;
     const key = 'usdaf|' + id;
     const hit = recall(key); if (hit) return hit;
-    const r = await usdaFetch(`${USDA_BASE()}/food/${id}?` + new URLSearchParams({ api_key: apiKey }), now() + budgetMs, uid);
+    const r = await usdaFetch(`${USDA_BASE()}/food/${id}`, now() + budgetMs, uid, apiKey);
     if (r.notFound) return remember(key, null, 5 * 60000);
     if (!r.data || typeof r.data !== 'object' || Array.isArray(r.data)) { logShape('USDA FoodData Central', 'food', r.status, r.data, now); throw new LookupError('bad', 'unexpected shape'); }
     const cand = candidateOf(r.data);

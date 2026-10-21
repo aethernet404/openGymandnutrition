@@ -17,6 +17,7 @@ import * as hae from './hae.js';
 import * as haeDebug from './hae-debug.js';
 import { scaleMicros, microsOf } from './micros.js';
 import * as standin from './standin.js';
+import { redact } from './redact.js';
 import { createUsdaBudget } from './usda-budget.js';
 import { createWindow, createBackoff } from '../rate-limit.js';
 import { createAnalyzer, availability, checkInput, FAILURES } from './analyze.js';
@@ -95,7 +96,7 @@ export function nutritionRoutes({
   };
   const aiFail = (res, code, uid, detail) => {
     const f = FAILURES[code] || FAILURES.provider;
-    if (detail && code !== 'cap') console.error('nutrition: AI analysis failed:', code, String(detail).slice(0, 200));
+    if (detail && code !== 'cap') console.error('nutrition: AI analysis failed:', code, redact(detail));
     json(res, f.status, { error: f.text, code, ai: allowance(uid) });
   };
 

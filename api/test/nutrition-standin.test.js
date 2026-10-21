@@ -33,8 +33,9 @@ const BY_ID = Object.fromEntries([TAQUITO, GREASY, RAW].map(f => [f.fdcId, f]));
 const searchHit = f => ({ fdcId: f.fdcId, description: f.description, dataType: f.dataType });
 
 function fakeUsda({ search = () => [TAQUITO, GREASY], fail = null } = {}) {
-  const f = { searches: [], details: [] };
-  f.fetch = async url => {
+  const f = { searches: [], details: [], keys: [], urls: [] };
+  f.fetch = async (url, init = {}) => {
+    if (url.toString().includes('nal.usda.gov')) { f.keys.push(init.headers?.['X-Api-Key']); f.urls.push(String(url)); }
     url = String(url);
     if (fail === 'down') return { ok: false, status: 503, text: async () => '' };
     if (url.includes('/foods/search')) {
@@ -42,7 +43,7 @@ function fakeUsda({ search = () => [TAQUITO, GREASY], fail = null } = {}) {
       f.searches.push({ query: u.searchParams.get('query'), types: u.searchParams.get('dataType'), params: [...u.searchParams.keys()].sort() });
       return json({ foods: search(u.searchParams.get('query'), u.searchParams.get('dataType')).map(searchHit) });
     }
-    const m = url.match(/\/food\/(\d+)\?/);
+    const m = url.match(/\/food\/(\d+)(\?|$)/);
     if (m) { f.details.push(Number(m[1])); const d = BY_ID[m[1]]; return d ? json(d) : { ok: false, status: 404, text: async () => '' }; }
     throw new Error('unexpected url ' + url);
   };
@@ -88,7 +89,8 @@ test('USDA candidates: reference datasets including Survey (FNDDS); Branded only
   assert.deepEqual(c.map(x => [x.fdcId, x.dataType]), [[2003003, 'Survey (FNDDS)'], [1000001, 'SR Legacy']]);
   await lk.usdaCandidates('Taquitos', '7-Eleven', 'KEY');
   assert.ok(usda.searches.some(s => s.types === 'Branded' && /7-Eleven/.test(s.query)));
-  for (const s of usda.searches) assert.deepEqual(s.params, ['api_key', 'dataType', 'pageSize', 'query']);
+  for (const s of usda.searches) assert.deepEqual(s.params, ['dataType', 'pageSize', 'query']);
+  assert.ok(usda.keys.every(k => k === 'KEY') && usda.urls.every(u => !u.includes('api_key') && !u.includes('KEY')), 'the key is in the header only');
   assert.deepEqual(await lk.usdaCandidates('x', '', 'KEY'), [], 'a one-letter name is not searched');
 });
 

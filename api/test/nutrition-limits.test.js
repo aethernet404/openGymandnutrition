@@ -229,3 +229,80 @@ test('the default is 120 changes a minute', async () => {
   assert.equal(last.status, 429);
   store.removeUser('lmw3');
 });
+
+/* ------------------------------ the USDA key in a header; what the AI runtime's errors may put in the log ------------------------------ */
+
+const { redact } = await import('../nutrition/redact.js');
+
+test('redact: credentials, addresses, emails and URLs never reach the log; length is bounded', () => {
+  const secrets = ['sk-ant-oat01-AbCdEfGhIjKlMnOpQrStUvWx', 'Bearer abc.def.ghi', 'token=supersecretvalue123', 'api_key: KEY1234567890', 'ogh_0123456789abcdef_' + 'a'.repeat(64),
+    'ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', 'owner@example.com', '203.0.113.9', 'https://api.example.com/x?api_key=SECRET', 'a'.repeat(40), 'AUTHORIZATION: Basic dXNlcjpwYXNz'];
+  const out = redact(`runtime failed: ${secrets.join(' | ')} ${'x '.repeat(500)}`);
+  for (const sec of secrets) assert.ok(!out.includes(sec) && !out.includes(sec.split(/[:= ]/).pop()), `still there: ${sec}`);
+  assert.ok(out.length <= 160);
+  assert.equal(redact('the model\u0000 said\n\n no', 100), 'the model said no');
+  assert.equal(redact(undefined), '');
+  assert.equal(redact('overloaded_error: try again later'), 'overloaded_error: try again later', 'ordinary words survive');
+});
+
+test('an AI failure writes a redacted, bounded line to the log: no token, no address, no long text', async () => {
+  forcePrivilegeVerdict({ ok: true, dropped: false, why: 'pinned by the test' });
+  coach.reset();
+  coach.save({ enabled: true, provider: 'claude', authMode: 'instance', boundUid: {}, auth: { claude: { type: 'cli-token', account: 'o@example.test', data: coach.encrypt({ token: 'tok-owner' }) } } });
+  ncfg.save({ aiDailyCap: 30 });
+  store.removeUser('lma');
+  const leak = 'Invalid token sk-ant-oat01-SECRETSECRETSECRETSECRET for owner@example.com from 198.51.100.7 ' + 'z'.repeat(400);
+  const t = setup({ usdaSearch: () => FOOD, invoke: () => ({ code: 1, text: '', stderr: leak, timedOut: false, spawnError: false }) });
+  const lines = [];
+  const orig = console.error; console.error = (...a) => lines.push(a.join(' '));
+  try { await t.call('POST /api/nutrition/analyze', { body: { kind: 'text', text: 'two eggs' } }); } finally { console.error = orig; }
+  const log = lines.join('\n');
+  assert.match(log, /AI analysis failed/);
+  for (const bad of ['sk-ant', 'SECRETSECRET', 'owner@example.com', '198.51.100.7', 'zzzzzzzzzz']) assert.ok(!log.includes(bad), bad);
+  assert.ok(log.length < 260);
+});
+
+test('USDA: the key goes in the X-Api-Key header and in no URL', async () => {
+  const seen = [];
+  const lk = createLookup({ fetch: async (url, init) => { seen.push([String(url), init.headers['X-Api-Key']]); return json({ foods: [] }); }, sleep: async () => {}, timeoutMs: 1000, retryDelayMs: 0 });
+  await lk.search('apple', { usdaKey: 'KEY12345', sources: 'usda' });
+  await lk.usdaFood(5, 'KEY12345');
+  assert.ok(seen.length >= 4);
+  for (const [u, k] of seen) { assert.equal(k, 'KEY12345'); assert.ok(!u.includes('KEY12345') && !u.includes('api_key'), u); }
+});
+
+test('USDA: if the header form is refused but the URL form is accepted, the server switches to it, once, and says so', async () => {
+  const seen = [];
+  const f = async (url, init) => {
+    seen.push(String(url));
+    const inUrl = new URL(url).searchParams.get('api_key') === 'KEY12345';
+    return inUrl ? json({ foods: [] }) : { ok: false, status: 403, text: async () => '' };
+  };
+  const lines = [];
+  const orig = console.error; console.error = (...a) => lines.push(a.join(' '));
+  try {
+    const lk = createLookup({ fetch: f, sleep: async () => {}, timeoutMs: 1000, retryDelayMs: 0 });
+    const r = await lk.search('apple', { usdaKey: 'KEY12345', sources: 'usda' });
+    assert.equal(r.sources.usda.ok, true);
+    seen.length = 0;
+    await lk.search('pear', { usdaKey: 'KEY12345', sources: 'usda' });
+    assert.ok(seen.length === 3 && seen.every(u => u.includes('api_key=KEY12345')), 'it keeps using the form that works');
+  } finally { console.error = orig; }
+  assert.equal(lines.filter(l => /did not accept the key in the X-Api-Key header/.test(l)).length, 1);
+  assert.ok(!lines.join('').includes('KEY12345'), 'the key is not in the log line');
+});
+
+test('USDA: a genuinely bad key is reported as rejected, and the second form is not tried again for ten minutes', async () => {
+  let n = 0;
+  const c = clock();
+  const lk = createLookup({ fetch: async () => { n++; return { ok: false, status: 403, text: async () => '' }; }, sleep: async () => {}, timeoutMs: 1000, retryDelayMs: 0, now: c.now });
+  const first = await lk.search('apple', { usdaKey: 'BADKEY123', sources: 'usda' });
+  assert.deepEqual([first.sources.usda.ok, first.sources.usda.kind], [false, 'auth']);
+  assert.equal(n, 6, 'header form, then URL form, for each of the three requests');
+  n = 0;
+  await lk.search('pear', { usdaKey: 'BADKEY123', sources: 'usda' });
+  assert.equal(n, 3, 'within ten minutes only the header form');
+  c.advance(11 * 60000); n = 0;
+  await lk.search('plum', { usdaKey: 'BADKEY123', sources: 'usda' });
+  assert.equal(n, 6, 'after ten minutes it checks again (the key may have been fixed)');
+});

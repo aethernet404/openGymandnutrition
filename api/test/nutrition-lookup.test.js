@@ -75,13 +75,16 @@ test('USDA: the nested nutrient shape of the detail endpoint and kJ-only energy 
 
 test('search: both sources answer; the USDA reference food leads the rest', async () => {
   const urls = [];
-  const lk = createLookup({ fetch: async url => { urls.push(String(url)); return String(url).includes('openfoodfacts') ? res({ products: [NUTELLA, KJ_ONLY, NO_NUTRITION] }) : res({ foods: [CHEDDAR, BRANDED] }); } });
+  const inits = [];
+  const lk = createLookup({ fetch: async (url, init) => { urls.push(String(url)); inits.push([String(url), init]); return String(url).includes('openfoodfacts') ? res({ products: [NUTELLA, KJ_ONLY, NO_NUTRITION] }) : res({ foods: [CHEDDAR, BRANDED] }); } });
   const r = await lk.search('cheddar', { usdaKey: 'KEY12345' });
   assert.equal(r.results[0].name, 'Cheese, Cheddar');
   assert.equal(r.results[0].kind, 'sr');
   assert.deepEqual(r.sources.usda, { ok: true, count: 1 });
   assert.equal(r.sources.off.ok, true);
-  assert.ok(urls.some(u => u.includes('api_key=KEY12345') && u.includes('query=cheddar')));
+  assert.ok(urls.some(u => u.includes('query=cheddar')));
+  assert.ok(!urls.some(u => u.includes('KEY12345') || u.includes('api_key')), 'the USDA key is not in any URL');
+  assert.ok(inits.filter(([u]) => u.includes('nal.usda.gov')).every(([, i]) => i.headers['X-Api-Key'] === 'KEY12345'), 'it travels in the X-Api-Key header');
   assert.ok(urls.some(u => u.includes('Foundation%2CSR+Legacy')), 'reference foods are asked for on their own…');
   assert.ok(urls.some(u => u.includes('dataType=Branded')), '…so the branded labels cannot crowd them out');
 });

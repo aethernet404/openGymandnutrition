@@ -147,7 +147,9 @@ test('a rate limit or a rejected key is not retried: asking again only makes the
     let n = 0;
     const { lk } = service(() => { n++; return res('', status); });
     const r = await lk.search('banana', { usdaKey: 'KEY12345', sources: 'usda' });
-    assert.equal(n, 3, 'USDA is asked three times (reference, branded, mixed dishes), once each');
+    // Three requests (reference, branded, mixed dishes), none retried. A refused key (401/403) is also tried once in the URL
+    // form, because the header form could not be verified against USDA's pages: that is three more.
+    assert.equal(n, status === 429 ? 3 : 6);
     assert.equal(r.sources.usda.kind, kind);
   }
   let n = 0;

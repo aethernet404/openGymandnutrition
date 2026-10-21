@@ -133,7 +133,7 @@ async function upstream(t) {
       return send(404, { status: 0 });
     }
     if (u.pathname === '/usda/foods/search') {
-      if (u.searchParams.get('api_key') !== 'goodkey1234') return send(403, { error: { code: 'API_KEY_INVALID' } });
+      if (req.headers['x-api-key'] !== 'goodkey1234' || u.searchParams.has('api_key')) return send(403, { error: { code: 'API_KEY_INVALID' } });
       return send(200, { foods: [{ fdcId: 328637, description: 'CHEESE, CHEDDAR', foodNutrients: [{ nutrientId: 1003, value: 23.3 }, { nutrientId: 1004, value: 33.3 }, { nutrientId: 1005, value: 3.09 }, { nutrientId: 1008, value: 404 }] }] });
     }
     send(404, {});
