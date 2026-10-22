@@ -82,7 +82,9 @@ jobs:
 **Risks:** a wrong `GHCR_KEEP` can delete the running image (hence the dry-run default and the weekly cadence); deleting is permanent.
 Version `created_at` is when the version was pushed, which is the order we want.
 
-## 2. The 10 upstream tests that fail only because of fixed dates (ask-first)
+## 2. The 10 upstream tests that fail only because of fixed dates (APPLIED 2026-10-22: the clock pin)
+
+*Applied as proposed: `api/test/clock-pin.mjs`, `api/scripts/run-tests.mjs`, and the `"test"` line of `api/package.json`. `npm test` is now fully green. The text below is the original proposal.*
 
 **What fails.** 10 tests in 5 files whose fixtures contain workouts dated July 2026; the Coach reads a 12-week window, so as
 of mid-October 2026 those workouts are outside it. They fail the same way on a pristine upstream checkout.

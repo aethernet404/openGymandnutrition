@@ -320,5 +320,5 @@ would corrupt them.
 | Tests | `api/test/nutrition-*.test.js`; the app's tests sit beside the code in `frontend/src/nutrition/` |
 | Guides | `docs/NUTRITION_*.md` and `api/nutrition/README.md` (the route table); `NUTRITION_PROPOSALS.md` (ideas not yet applied: image retention, test-date fix, moving to `main`); `NUTRITION_FORK_IMAGES.md` also lists which GitHub workflows to keep or disable |
 
-Run the tests: `cd api && npm test` and `cd frontend && npm test`. Ten api tests that depend on the calendar date fail on
-a pristine upstream checkout too ("date rot"); they pass with the clock set to 2026-10-12.
+Run the tests: `cd api && npm test` and `cd frontend && npm test`. Five upstream test files whose fixtures contain July 2026 workouts only pass while the clock is pinned to 2026-10-12;
+`npm test` pins it for just those files (`api/scripts/run-tests.mjs`, `api/test/clock-pin.mjs`). Remove the pin when upstream's fixtures use relative dates.
