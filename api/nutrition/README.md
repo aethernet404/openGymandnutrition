@@ -58,6 +58,9 @@ failure and is logged (service, kind, HTTP status and top-level key names only),
 timeout each. Mirrors/tests: `NUTRITION_OFF_BASE`, `NUTRITION_USDA_BASE`. AI logging adds no new
 destination: the Claude runtime talks to Anthropic exactly as the Coach does.
 
+## Labels from photos and supplement barcodes
+`label.js` (validation, synonyms, unit conversion, consistency checks), `dsld.js` (NIH DSLD parsing), routes `POST /label`, `POST /micros/label`, `GET /barcode?kind=supplement`, `GET /supplements/search|label`. DSLD env: `NUTRITION_DSLD_BASE`, `NUTRITION_DSLD_HOURLY_CAP|DAILY_CAP|USER_HOURLY_CAP`. Unverified against the live API: `node scripts/verify-dsld.mjs`. See `docs/NUTRITION_LABELS.md`.
+
 ## Files in this module
 `routes.js` (HTTP), `store.js` (per-profile file, write queue), `validate.js`, `config.js` (admin settings),
 `lookup.js` (OFF/USDA), `usda-budget.js` (the USDA request budget), `standin.js` (USDA stand-ins), `redact.js` (log-safe text), `analyze.js` + `vision.js` + `pipeline.js` + `meal.js` + `prompt.js` (AI estimate),

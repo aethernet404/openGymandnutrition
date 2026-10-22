@@ -181,7 +181,9 @@ fill the gaps **without inventing a number**:
    Nothing is sent to the AI or USDA but food names, brand names, amounts, calories and macros (USDA: only the name and brand
    search text and the fdcId). No photos, dates, profile names or entry ids. Choosing another candidate and accepting use no AI.
 
-## NIH Dietary Supplement Label Database (DSLD): research only, not built
+> Update: the DSLD client and label photo reading were built later; see `docs/NUTRITION_LABELS.md`. The notes below are the original research.
+
+## NIH Dietary Supplement Label Database (DSLD): research
 
 * **Is there a free public API?** Yes: the DSLD Label API, base `https://api.ods.od.nih.gov/dsld/v9` (version 9.4 in
   its reference). Methods seen: `GET /v9/search-filter` (search terms plus filters: `q`, `status` on/off market,
