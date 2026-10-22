@@ -22,7 +22,7 @@ const m = vi.hoisted(() => ({
   api: {
     getDay: vi.fn(), getConfig: vi.fn(), addEntries: vi.fn(), updateEntry: vi.fn(), deleteEntry: vi.fn(),
     listFoods: vi.fn(), createFood: vi.fn(), updateFood: vi.fn(), deleteFood: vi.fn(), getGoals: vi.fn(), putGoals: vi.fn(),
-    getAdmin: vi.fn(), putAdmin: vi.fn(), searchFoods: vi.fn(), lookupBarcode: vi.fn(), testUsda: vi.fn(), testFatsecret: vi.fn(), getFatsecretFood: vi.fn(), restoreConfig: vi.fn(), matchMicros: vi.fn(), previewMicros: vi.fn(), applyMicros: vi.fn(), getStack: vi.fn(), putStack: vi.fn(), analyze: vi.fn(), setCoachShare: vi.fn(), createHealthToken: vi.fn(), revokeHealthToken: vi.fn(), putHealthSettings: vi.fn(), getWeight: vi.fn(), getHealthHistory: vi.fn(), getHealthDebug: vi.fn(), clearHealthDebug: vi.fn()
+    getAdmin: vi.fn(), putAdmin: vi.fn(), searchFoods: vi.fn(), lookupBarcode: vi.fn(), testUsda: vi.fn(), testFatsecret: vi.fn(), getFatsecretFood: vi.fn(), restoreConfig: vi.fn(), matchMicros: vi.fn(), previewMicros: vi.fn(), applyMicros: vi.fn(), getStack: vi.fn(), putStack: vi.fn(), readLabel: vi.fn(), applyLabelMicros: vi.fn(), searchSupplements: vi.fn(), getSupplementLabel: vi.fn(), analyze: vi.fn(), setCoachShare: vi.fn(), createHealthToken: vi.fn(), revokeHealthToken: vi.fn(), putHealthSettings: vi.fn(), getWeight: vi.fn(), getHealthHistory: vi.fn(), getHealthDebug: vi.fn(), clearHealthDebug: vi.fn()
   }
 }))
 
@@ -44,7 +44,7 @@ vi.mock('../store/useUI.js', () => {
 vi.mock('../sheets.jsx', () => ({ confirmSheet: (...a) => m.confirm(...a) }))
 vi.mock('./api.js', () => m.api)
 vi.mock('../lib/clipboard.js', () => ({ copyText: (...a) => m.copy(...a) }))
-vi.mock('./image.js', () => ({ downscaleToJpeg: (...a) => m.downscale(...a) }))
+vi.mock('./image.js', () => ({ MAX_EDGE: 1280, downscaleToJpeg: (...a) => m.downscale(...a) }))
 vi.mock('./barcode-decode.js', () => ({ decodeFile: (...a) => m.decode(...a) }))
 
 const { default: Diary } = await import('./Diary.jsx')
@@ -2460,6 +2460,32 @@ describe('Fill in micronutrients', () => {
     expect(byText('button', 'Try again')).toBeTruthy()
   })
 
+  it('each proposal also offers "Use label photos instead": it opens the label reader for THAT entry; a saved result is marked as label data, not an estimate', async () => {
+    day([WRAP]); m.api.matchMicros.mockResolvedValue({ results: [{ id: 'e2', status: 'none', reason: 'nothing close', candidates: [] }] })
+    const s = await openFill()
+    await click(byText('button', 'Find stand-ins'))
+    await click(byText('button', 'Use label photos instead'))
+    const label = await showSheet()
+    expect(label.el.textContent).toContain('Scan a label')
+    expect(label.el.querySelector('input[multiple]')).toBeTruthy()
+    expect(m.api.applyLabelMicros).not.toHaveBeenCalled()
+  })
+
+  it('old data still loads: a saved food without a barcode opens, offers "Read from label photos", and an AI-estimate food keeps its badge', async () => {
+    openFoodSheet({ food: { id: 'f1', source: 'custom', origin: 'ai', name: 'Old', brand: '', serving: { label: '1', grams: null }, per: { calories: 1, protein_g: 0, carbs_g: 0, fat_g: 0 } }, onSaved: vi.fn() })
+    const s = await showSheet()
+    expect(s.el.textContent).toContain('AI estimate')
+    expect(byText('button', 'Read from label photos')).toBeTruthy()
+  })
+
+  it('Add food has "Scan a label" next to Photo and Describe', async () => {
+    openAddSheet({ date: '2026-10-12', meal: 'snack', onSaved: vi.fn() })
+    const s = await showSheet()
+    expect(byText('button', 'Scan a label')).toBeTruthy()
+    await click(byText('button', 'Scan a label'))
+    expect(s.el.textContent).toContain('choose several from your library')
+  })
+
   it('Edit entry: the action appears for an entry with no vitamins or minerals, not for one that has them; an estimate shows its source and can be removed', async () => {
     openEditEntry({ entry: WRAP, date: today, onSaved: vi.fn() })
     let s = await showSheet()
@@ -2699,7 +2725,7 @@ describe('Vitamins & supplements', () => {
     m.api.listFoods.mockResolvedValue({ foods: [] }); m.api.getStack.mockResolvedValue({ items: [] })
     m.api.createFood.mockResolvedValue({ food: { id: 'new1' } }); m.api.addEntries.mockResolvedValue({ entries: [] })
     const s = await openSheet(); await flush()
-    await click(byText('button', 'New'))
+    await click(byText('button', 'New')); await click(byText('button', 'Manual'))
     await setValue(s.el.querySelector('input[aria-label="Supplement name"]'), 'Vitamin D3 2000 IU')
     await setValue(s.el.querySelector('input[aria-label="Serving"]'), '1 softgel')
     expect(s.el.querySelectorAll('.nut-chip').length).toBe(10)
@@ -2717,7 +2743,7 @@ describe('Vitamins & supplements', () => {
   it('New supplement with Save off: logged once with its own numbers scaled by the servings, nothing saved', async () => {
     m.api.listFoods.mockResolvedValue({ foods: [] }); m.api.getStack.mockResolvedValue({ items: [] }); m.api.addEntries.mockResolvedValue({ entries: [] })
     const s = await openSheet(); await flush()
-    await click(byText('button', 'New'))
+    await click(byText('button', 'New')); await click(byText('button', 'Manual'))
     await setValue(s.el.querySelector('input[aria-label="Supplement name"]'), 'Gummy')
     await setValue(s.el.querySelector('input[aria-label="Calories per serving"]'), '15')
     await click(byText('button', '+ Vitamin C')); await setValue(s.el.querySelector('input[aria-label="Vitamin C"]'), '60')
@@ -2732,7 +2758,7 @@ describe('Vitamins & supplements', () => {
   it('New supplement: a name is required, a bad amount is refused in words, an empty box is never sent as 0, a duplicate is asked inline', async () => {
     m.api.listFoods.mockResolvedValue({ foods: [] }); m.api.getStack.mockResolvedValue({ items: [] })
     const s = await openSheet(); await flush()
-    await click(byText('button', 'New'))
+    await click(byText('button', 'New')); await click(byText('button', 'Manual'))
     await click(byText('button', 'Add to supplements'))
     expect(m.toast).toHaveBeenCalledWith('A food needs a name')
     expect(m.api.createFood).not.toHaveBeenCalled()

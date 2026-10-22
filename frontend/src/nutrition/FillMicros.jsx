@@ -8,6 +8,7 @@ import { useUI } from '../store/useUI.js'
 import { dateLocale } from '../lib/i18n.js'
 import { nt } from './i18n.js'
 import * as nutri from './api.js'
+import { openLabelSheet } from './LabelFlow.jsx'
 import { allowanceText, unavailableText } from './ai.js'
 import { NUTRIENTS, amountText, canFill, diffText } from './micros.js'
 
@@ -88,6 +89,7 @@ function Card({ item, entry, date, onItem }) {
   }
 
   if (item.state === 'accepted') return <div className="nut-fill-card done"><b>{entry.name}</b><div className="small"><Icon name="check" /> {nt('Saved as an estimate from USDA {0}.', shown.name)}</div></div>
+  if (item.state === 'label') return <div className="nut-fill-card done"><b>{entry.name}</b><div className="small"><Icon name="check" /> {nt('Saved from your label photos: real label values, not an estimate.')}</div></div>
   if (item.state === 'skipped') return <div className="nut-fill-card done"><b>{entry.name}</b><div className="muted small">{nt('Left as it was.')}</div></div>
   if (item.status === 'skipped') return <div className="nut-fill-card done"><b>{entry.name}</b><div className="muted small">{nt(SKIP_TEXT[item.why] || 'Skipped.')}</div></div>
 
@@ -118,6 +120,9 @@ function Card({ item, entry, date, onItem }) {
       {shown && <Button variant="primary" size="sm" onClick={accept} disabled={busy || !canAccept}>{warn ? nt('Accept anyway') : nt('Accept')}</Button>}
       {item.candidates?.length > 0 && shown && <Button size="sm" onClick={() => setChoosing(c => !c)} disabled={busy}>{nt('Choose another')}</Button>}
       <Button size="sm" variant="ghost" onClick={() => set({ state: 'skipped' })} disabled={busy}>{nt('Cancel')}</Button>
+    </div>
+    <div className="nut-fill-actions">
+      <Button size="sm" icon="camera" onClick={() => openLabelSheet({ mode: 'entry', entry, date, hint: 'food', onApplied: () => set({ state: 'label' }) })} disabled={busy}>{nt('Use label photos instead')}</Button>
     </div>
   </div>
 }
@@ -159,7 +164,7 @@ function FillSheet({ date, entries, replace, onDone, close }) {
     setItems(got); setStage('review')
   }
   const onItem = (id, patch) => {
-    if (patch.state === 'accepted') { changed.current = true; onDone?.() }
+    if (patch.state === 'accepted' || patch.state === 'label') { changed.current = true; onDone?.() }
     setItems(list => list.map(x => (x.id === id ? { ...x, ...patch } : x)))
   }
   const left = items.filter(x => x.state === 'open' && x.status !== 'skipped').length

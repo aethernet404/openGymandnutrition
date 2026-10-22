@@ -11,6 +11,7 @@ import { MOBILE } from '../lib/mobile.js'
 import { scanCode } from '../lib/scan.js'
 import BarcodeScanner from './BarcodeScanner.jsx'
 import AiLog from './AiLog.jsx'
+import LabelFlow, { OtherList, openLabelSheet } from './LabelFlow.jsx'
 import { FillOption, openFillMicros } from './FillMicros.jsx'
 import { allowanceText, unavailableText } from './ai.js'
 import { nt } from './i18n.js'
@@ -43,8 +44,8 @@ export function MacroFields({ v, set, disabled, caloriesLabel = 'Calories' }) {
  * null / missing = not known); an empty box means unknown and is never sent as 0. Amounts are per serving in a food form
  * and for the whole entry in the Edit entry sheet.
  */
-export function MoreNutrients({ v, set, disabled = false, note }) {
-  const [open, setOpen] = useState(false)
+export function MoreNutrients({ v, set, disabled = false, note, defaultOpen = false, flagged = null }) {
+  const [open, setOpen] = useState(defaultOpen)
   const filled = Object.keys(cleanMicros(v)).length
   return <div className="nut-more">
     <button type="button" className="nut-more-h" onClick={() => setOpen(o => !o)} aria-expanded={open}>
@@ -56,7 +57,7 @@ export function MoreNutrients({ v, set, disabled = false, note }) {
       {GROUPS.map(g => <div key={g.id}>
         <div className="nut-section-t">{nt(g.label)}</div>
         <div className="nut-fields">
-          {NUTRIENTS.filter(n => n.group === g.id).map(n => <label className="nut-field" key={n.key}>
+          {NUTRIENTS.filter(n => n.group === g.id).map(n => <label className={'nut-field' + (flagged?.has(n.key) ? ' nut-flag' : '')} key={n.key}>
             <span>{nt(n.label)}</span>
             <span className="nut-input"><NumberField nullable value={v?.[n.key] ?? null} disabled={disabled} onChange={x => set({ ...v, [n.key]: x })} aria-label={nt(n.label)} /><i>{n.unit}</i></span>
           </label>)}
@@ -89,12 +90,13 @@ export function SaveFoodFields({ v, set }) {
 }
 
 /** Already saved under this name and brand: the two honest choices, inline (no popup). */
-export function DuplicateChoice({ existing, onChoose, busy = false }) {
+export function DuplicateChoice({ existing, onChoose, busy = false, onUse = null, updateText = null }) {
   return <div className="nut-banner warn nut-dup" role="alert">
     <Icon name="warning" />
     <span>{nt('You already have “{0}” saved ({1}, {2} kcal).', existing.name, existing.serving?.label || nt('1 serving'), existing.per?.calories ?? '?')}</span>
     <div className="nut-dup-actions">
-      <Button size="sm" onClick={() => onChoose('update')} disabled={busy}>{nt('Update the saved food')}</Button>
+      {onUse && <Button size="sm" onClick={onUse} disabled={busy}>{nt('Use the saved one')}</Button>}
+      <Button size="sm" onClick={() => onChoose('update')} disabled={busy}>{updateText || nt('Update the saved food')}</Button>
       <Button size="sm" onClick={() => onChoose('new')} disabled={busy}>{nt('Save as a new one')}</Button>
     </div>
   </div>
@@ -266,7 +268,7 @@ function HitRow({ hit, onPick }) {
 /* The barcode panel. Order of preference, on every device: a PHOTO of the barcode through the
    phone's own camera (always works, and is read in the page); the live viewfinder where the
    browser or app has one (an extra); and typing the number (always there). */
-function ScanPanel({ methods, onCode, onTyped }) {
+export function ScanPanel({ methods, onCode, onTyped }) {
   const [live, setLive] = useState(false)
   const [state, setState] = useState({ status: 'idle', message: '' })    // idle | reading | none | error
   const [liveFail, setLiveFail] = useState('')
@@ -478,6 +480,7 @@ function AddSheet({ date, meal: initial, onSaved, close }) {
   const [aiText, setAiText] = useState('')         // the search words, carried into Describe
   useEffect(() => { let live = true; nutri.getConfig().then(c => live && setAi(c.ai)).catch(() => {}); return () => { live = false } }, [])
 
+  if (aiMode === 'label') return <LabelFlow mode="food" date={date} meal={meal} onBack={() => setAiMode(null)} onSaved={onSaved} close={close} />
   if (aiMode) return <AiLog mode={aiMode} initialText={aiText} date={date} meal={meal} ai={ai} onAi={a => setAi(x => ({ ...x, ...a }))}
     onBack={() => { setAiMode(null); setAiText('') }} onSaved={onSaved} close={close}
     onManual={name => { setCarry(name || ''); setAiMode(null); setTab('quick') }} />
@@ -490,6 +493,7 @@ function AddSheet({ date, meal: initial, onSaved, close }) {
     <div className="nut-ai-row">
       <Button icon="camera" variant="tinted" onClick={() => setAiMode('photo')} disabled={blocked}>{nt('Photo')}</Button>
       <Button icon="sparkles" variant="tinted" onClick={() => { setAiText(''); setAiMode('text') }} disabled={blocked}>{nt('Describe')}</Button>
+      <Button className="nut-lab-wide" icon="qr" variant="tinted" onClick={() => setAiMode('label')} disabled={blocked}>{nt('Scan a label')}</Button>
     </div>
     {why && <div className={'small nut-ai-why' + (blocked ? ' off' : '')}>{nt(why)}</div>}
     <Segmented value={tab} onChange={setTab} options={[{ value: 'search', label: nt('Search') }, { value: 'foods', label: nt('My foods') }, { value: 'quick', label: nt('Quick add') }]} />
@@ -599,6 +603,12 @@ function EditEntry({ entry, date, onSaved, close }) {
     <MacroFields v={m} set={editMacro} />
     <MoreNutrients v={mi} set={nv => { setMi(nv); if (changed) setMiManual(true) }} note={nt('Amounts for this whole entry. Leave a box empty if unknown: that stays unknown, not 0.')} />
     <EstimateBox entry={entry} date={date} onSaved={onSaved} close={close} />
+    {entry.meal !== 'supplements' && <div style={{ margin: '8px 0' }}><Button size="sm" icon="camera" onClick={() => openLabelSheet({ mode: 'fill', hint: 'food', onUse: lf => {
+      if (lf.name) setName(lf.name)
+      setM({ calories: Math.round((lf.calories ?? 0) * qty), protein_g: Math.round((lf.protein_g ?? 0) * qty * 10) / 10, carbs_g: Math.round((lf.carbs_g ?? 0) * qty * 10) / 10, fat_g: Math.round((lf.fat_g ?? 0) * qty * 10) / 10 })
+      setMi(scaleMicros(cleanMicros(lf.micros || {}), qty)); setMiManual(true)
+    } })}>{nt('Read from label photos')}</Button>
+      <div className="muted small">{nt('Fills this form with the label values for the amount above. Nothing changes until you press Save.')}</div></div>}
     {manualKeys.length > 0 && <div className="nut-banner nut-manual"><span>{nt('You edited {0} by hand. It stays as you set it when you change the amount.', manualKeys.map(k => nt(MACRO_LABEL[k]).toLowerCase()).join(', '))}</span> <button className="linkbtn" onClick={resetManual}>{nt('Recalculate')}</button></div>}
     <div style={{ height: 10 }} />
     {entry.meal !== 'supplements' && <SelectRow title={nt('Meal')} sheetTitle={nt('Meal')} value={meal} onChange={setMeal} options={mealOptions()} />}
@@ -625,12 +635,24 @@ function FoodSheet({ food, prefill, onSaved, close }) {
   const [m, setM] = useState({ calories: food?.per.calories ?? null, protein_g: food?.per.protein_g ?? null, carbs_g: food?.per.carbs_g ?? null, fat_g: food?.per.fat_g ?? null })
   const [busy, setBusy] = useState(false)
   const [mi, setMi] = useState(food?.micros || {})
+  const [fromLabel, setFromLabel] = useState(null)      // upc / other ingredients read from label photos, saved with the food
+  const useLabel = lf => {
+    setF(cur => ({ ...cur, name: lf.name || cur.name, brand: lf.brand || cur.brand, serving: lf.serving || cur.serving, grams: lf.grams ?? cur.grams }))
+    setM({ calories: lf.calories, protein_g: lf.protein_g, carbs_g: lf.carbs_g, fat_g: lf.fat_g })
+    setMi(lf.micros || {})
+    setFromLabel({ upc: lf.upc || '', others: lf.others || [] })
+  }
 
   const save = async () => {
     // Micronutrients are sent when typed, or (as an empty object) to clear ones the food had.
     const typed = cleanMicros(mi)
     const r = foodBody({ ...f, ...m, ext: food?.ext ?? prefill?.ext, ...(hasMicros(typed) || food?.micros ? { micros: typed } : {}) })
     if (r.ok && !food && prefill?.type) r.body.type = prefill.type          // a new saved supplement
+    if (r.ok && fromLabel) {
+      r.body.origin = 'label'
+      if (/^\d{8,14}$/.test(fromLabel.upc)) r.body.upc = fromLabel.upc
+      if (fromLabel.others.length) r.body.otherIngredients = fromLabel.others.map(o => ({ name: o.name, amount: o.amount ?? null, unit: o.unit || '' }))
+    }
     if (!r.ok) { toast(nt(r.error)); return }
     setBusy(true)
     try {
@@ -646,6 +668,10 @@ function FoodSheet({ food, prefill, onSaved, close }) {
   return <>
     <h3>{food ? (food.type === 'supplement' ? nt('Supplement') : nt('Food')) : prefill?.type === 'supplement' ? nt('New supplement') : nt('New food')}{food?.origin === 'ai' && <span className="tag nut-src nut-ai-badge">{nt('AI estimate')}</span>}</h3>
     {readOnly && <div className="muted small" style={{ marginBottom: 10 }}>{nt('This food came from a lookup, so its numbers cannot be edited.')}</div>}
+    {!readOnly && <div style={{ marginBottom: 10 }}>
+      <Button size="sm" icon="camera" onClick={() => openLabelSheet({ mode: 'fill', hint: food?.type === 'supplement' || prefill?.type === 'supplement' ? 'supplement' : 'food', onUse: useLabel })}>{nt('Read from label photos')}</Button>
+      {fromLabel && <div className="muted small">{nt('Filled in from your label photos. Check the numbers, then Save.')}</div>}
+    </div>}
     <TextField value={f.name} maxLength={120} placeholder={nt('Name')} disabled={readOnly} onChange={e => setF({ ...f, name: e.target.value })} aria-label={nt('Name')} />
     <div style={{ height: 8 }} />
     <TextField value={f.brand} maxLength={60} placeholder={nt('Brand (optional)')} disabled={readOnly} onChange={e => setF({ ...f, brand: e.target.value })} aria-label={nt('Brand')} />
@@ -657,6 +683,7 @@ function FoodSheet({ food, prefill, onSaved, close }) {
     <div style={{ height: 8 }} />
     <MacroFields v={m} set={setM} disabled={readOnly} />
     <MoreNutrients v={mi} set={setMi} disabled={readOnly} note={nt('Per serving. Leave a box empty if unknown: that stays unknown, not 0.')} />
+    <OtherList list={fromLabel ? fromLabel.others : food?.otherIngredients} />
     <div style={{ height: 14 }} />
     {!readOnly && <Button variant="primary" onClick={save} disabled={busy}>{nt('Save')}</Button>}
     {food && <><div style={{ height: 8 }} /><Button variant="ghost" style={{ color: 'var(--red)' }} icon="trash" onClick={remove}>{nt('Delete')}</Button></>}

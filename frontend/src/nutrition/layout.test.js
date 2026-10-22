@@ -89,4 +89,13 @@ describe('nutrition layout survives narrow screens and large text', () => {
     expect(rule('.nut')).toMatch(/min-width:0/)
     expect(css).toMatch(/\.nut-banner[^{]*\{[^}]*overflow-wrap:anywhere/)
   })
+  it('the label reader: thumbnails, rows and the review wrap and shrink; the highlighted box is marked', () => {
+    for (const sel of ['.nut-lab-strip', '.nut-lab-empty', '.nut-lab-bc', '.nut-lab-note', '.nut-lab-check', '.nut-lab-other', '.nut-lab-other li>span', '.nut-lab-entry', '.nut-lab-replace', '.nut-lab-menu>*']) expect(rule(sel), sel).toMatch(/min-width:0/)
+    for (const sel of ['.nut-lab-empty', '.nut-lab-bc', '.nut-lab-note', '.nut-lab-check', '.nut-lab-other', '.nut-lab-other li>span', '.nut-lab-replace']) expect(rule(sel), sel).toMatch(/overflow-wrap:anywhere/)
+    expect(rule('.nut-lab-strip')).toMatch(/flex-wrap:wrap/)
+    expect(rule('.nut-lab-entry .row')).toMatch(/flex-wrap:wrap/)
+    expect(rule('.nut-lab-menu')).toMatch(/minmax\(0,\s*1fr\)/)
+    expect(rule('.nut-flag .nut-input')).toMatch(/outline/)
+    expect(rule('.nut-lab-x')).toMatch(/width:28px/)          // a thumbnail’s remove button stays tappable
+  })
 })

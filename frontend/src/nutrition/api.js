@@ -29,7 +29,7 @@ export const putAdmin = body => send('PUT', '/api/admin/nutrition', body)
 // One source per request, so the fast one is on screen while the slow one is still working. The server
 // gives a source about 21 s (10 s, one retry at 8 s); the client waits a little longer than that.
 export const searchFoods = (text, source = 'all') => api('/api/nutrition/search?' + q({ q: text, source }), { timeout: 30000 })
-export const lookupBarcode = code => api('/api/nutrition/barcode?' + q({ code }), { timeout: 20000 })
+export const lookupBarcode = (code, kind) => api('/api/nutrition/barcode?' + q(kind ? { code, kind } : { code }), { timeout: kind ? 60000 : 20000 })
 // The full servings of a FatSecret food, asked only when a search row is tapped (food.get v5).
 export const getFatsecretFood = id => api('/api/nutrition/fatsecret/food?' + q({ id }), { timeout: 30000 })
 // Fill in micronutrients from USDA stand-ins. match: one AI call for up to 12 entries (the model only picks which USDA food is
@@ -39,6 +39,13 @@ export const previewMicros = (date, id, fdcId) => send('POST', '/api/nutrition/m
 export const applyMicros = (date, id, body) => send('POST', '/api/nutrition/micros/apply', { date, id, ...body })
 // A damaged settings file: put the backup made before the last save back.
 export const restoreConfig = () => send('POST', '/api/admin/nutrition/restore-config', {})
+// Read a food or supplement label from 1 to 4 photos (base64 JPEGs, already shrunk on this device). One AI analysis.
+export const readLabel = (photos, hint, note) => api('/api/nutrition/label', { method: 'POST', body: JSON.stringify({ photos, hint, ...(note ? { note } : {}) }), timeout: 100000 })
+// Label values onto an entry as its own data: { micros, overwrite?: [keys] }.
+export const applyLabelMicros = (date, id, body) => send('POST', '/api/nutrition/micros/label', { date, id, ...body })
+// Supplements in the NIH label database: by name, and one label by id.
+export const searchSupplements = text => api('/api/nutrition/supplements/search?' + q({ q: text }), { timeout: 60000 })
+export const getSupplementLabel = id => api('/api/nutrition/supplements/label?' + q({ id }), { timeout: 60000 })
 export const testUsda = () => send('POST', '/api/admin/nutrition/test-usda', {})
 export const testFatsecret = () => send('POST', '/api/admin/nutrition/test-fatsecret', {})
 

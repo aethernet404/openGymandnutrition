@@ -10,6 +10,8 @@ import { nt } from './i18n.js'
 import * as nutri from './api.js'
 import { foodBody } from './diary.js'
 import { BY_KEY, COMMON_SUPPLEMENT_KEYS, hasMicros, microsForSend, scaleMicros } from './micros.js'
+import { OtherList } from './LabelFlow.jsx'
+import SupplementAdd from './SupplementAdd.jsx'
 import { DuplicateChoice, MoreNutrients, openFoodSheet } from './sheets.jsx'
 
 const toast = m => useUI.getState().toast(m)
@@ -51,6 +53,7 @@ function Portion({ food, date, onBack, onDone, onEdit }) {
       <Stepper value={qty} step={1} min={0.5} max={100} onChange={setQty} ariaLabel={nt('Servings')} />
     </div>
     <div className="nut-preview">{nutrientCount(food) ? nt('{0} nutrients', nutrientCount(food)) : nt('No nutrient amounts saved')}{kcalOf(food) > 0 ? <span className="muted"> · {Math.round(kcalOf(food) * qty)} kcal</span> : null}</div>
+    <OtherList list={food.otherIngredients} />
     <div style={{ height: 14 }} />
     <Button variant="primary" onClick={add} disabled={busy}>{nt('Add to supplements')}</Button>
     <div style={{ height: 8 }} />
@@ -204,7 +207,7 @@ function SupplementSheet({ date, onSaved, close }) {
     <div style={{ height: 10 }} />
     <Segmented value={tab} onChange={setTab} options={[{ value: 'mine', label: nt('My supplements') }, { value: 'new', label: nt('New') }]} />
     <div style={{ height: 10 }} />
-    {tab === 'new' ? <NewSupplement date={date} onDone={done} /> : <>
+    {tab === 'new' ? <SupplementAdd date={date} onDone={done} close={close} manual={<NewSupplement date={date} onDone={done} />} /> : <>
       <Segmented value={scope} onChange={setScope} options={[{ value: 'recent', label: nt('Recent') }, { value: 'favorite', label: nt('Favourites') }, { value: 'all', label: nt('All') }]} />
       <div style={{ height: 10 }} />
       <SearchField value={text} onChange={e => setText(e.target.value)} onClear={() => setText('')} placeholder={nt('Search my supplements')} />
