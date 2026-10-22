@@ -22,6 +22,20 @@ export function sameBarcode(a, b) {
   return x.length >= 7 && x === y;
 }
 
+/** DSLD files a barcode as a SPACED string ("0 31604 02697 4": a 12-digit UPC-A as 1-5-5-1) and only a QUOTED, spaced search finds it
+ *  (checked live 2026-10-21: the bare digits, quoted or not, find nothing). The searches to try for a scanned code, best first, at most
+ *  MAX_UPC_QUERIES: the spaced UPC-A form (also from an EAN-13 that starts with 0), then the plain quoted digits as the last resort. */
+export const MAX_UPC_QUERIES = 3;
+export function upcQueries(code) {
+  const d = digits(code);
+  const out = [];
+  const spaced = u => `"${u[0]} ${u.slice(1, 6)} ${u.slice(6, 11)} ${u[11]}"`;
+  if (d.length === 12) out.push(spaced(d));
+  else if (d.length === 13 && d[0] === '0') out.push(spaced(d.slice(1)));
+  if (d.length >= 8 && d.length <= 14) out.push(`"${d}"`);
+  return out.slice(0, MAX_UPC_QUERIES);
+}
+
 const flagOn = v => v === 1 || v === true || v === '1' || v === 'true' || v === 'Y' || v === 'y';
 
 /** The search answer → [{ id, name, brand, upc, offMarket, date }] (any of them may be missing). */

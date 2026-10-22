@@ -181,7 +181,7 @@ fill the gaps **without inventing a number**:
    Nothing is sent to the AI or USDA but food names, brand names, amounts, calories and macros (USDA: only the name and brand
    search text and the fdcId). No photos, dates, profile names or entry ids. Choosing another candidate and accepting use no AI.
 
-> Update: the DSLD client and label photo reading were built later; see `docs/NUTRITION_LABELS.md`. The notes below are the original research.
+> Update: the DSLD client and label photo reading were built later and checked live (no key needed, barcodes stored spaced, only a quoted spaced search finds them, search hits carry no barcode); see `docs/NUTRITION_LABELS.md`. The notes below are the original research and parts are superseded (for example "UPC lookup by `upcSku`" is now the spaced, quoted search).
 
 ## NIH Dietary Supplement Label Database (DSLD): research
 

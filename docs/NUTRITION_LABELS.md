@@ -38,16 +38,32 @@ with this label, or Save as a new one.
 (2) NIH DSLD, (3) Open Food Facts then USDA Branded, (4) nothing → "Photograph the label instead" (the barcode is kept). A source that
 could not answer is listed in `tried`; "not found" is only said when every source that could answer said so.
 
-## NIH DSLD: what is and is not verified
-Base `https://api.ods.od.nih.gov/dsld/v9`. The client is written from the public guide and **was not run against the live API**: the
-environment this was built in blocks that host (HTTP 403 from the network policy), so whether a key is required, the real limits and
-whether `search-filter?q=<UPC>` returns the label with that UPC are **unverified**. The code accepts the documented response shapes,
-prefers the newest label not marked off market, and is tested with fixtures (several versions of one UPC, one off market).
-Check it from a machine that can reach the host: `node api/scripts/verify-dsld.mjs [UPC]` prints what it found. If UPC search does not
-work the barcode path falls through to Open Food Facts / USDA and then the photo; a bulk index (NIH download, ~215,000 labels) was
-**not** built. Public domain; the app shows the NIH attribution wherever DSLD data appears. Server budget: `NUTRITION_DSLD_HOURLY_CAP`
-(300), `NUTRITION_DSLD_DAILY_CAP` (3000), `NUTRITION_DSLD_USER_HOURLY_CAP` (60), counted in `DATA_DIR/dsld-usage.json`;
-`NUTRITION_DSLD_BASE` points it at a mirror. Timeouts and one retry, with errors in plain words.
+## NIH DSLD: what was verified, and the limits we apply
+Base `https://api.ods.od.nih.gov/dsld/v9`. The build environment could not reach the host, so the first client was written from the
+API guide. It was then checked **live on 2026-10-21** (calls made from the home server) and corrected. What that showed:
+* **No API key is needed.** No key error; every call answered 200. **No rate-limit headers** were visible (only an api-umbrella proxy
+  header), so the real limit is unknown. We therefore apply our own caps (below).
+* **Search hits (`GET /search-filter?q=`) carry no barcode.** The label detail (`GET /label/<id>`) has `upcSku`, `servingSizes`,
+  `ingredientRows`, `fullName`, `brandName` and `offMarket`.
+* **Barcodes are stored spaced**, e.g. label 1225 "Calcium With Vitamin D3" is `0 74312 76274 1`, label 179744 "Ultra Fish Oil 1400 mg" is
+  `0 31604 02697 4` (a 12-digit UPC-A grouped 1-5-5-1).
+* **Only the quoted, spaced query finds a label by barcode:** `q="0 31604 02697 4"` returns exactly label 179744. The bare digits
+  (`031604026974`), quoted or not, return 0 hits; spaced but unquoted returns unrelated labels.
+
+How the lookup works because of that (`dsld.upcQueries`, `lookup.dsldByUpc`):
+1. Build the quoted candidates from the scanned digits, best first, at most **3 search calls**: 12 digits → spaced 1-5-5-1, then the plain
+   quoted digits; 13 digits starting with 0 → the spaced form of its 12-digit UPC-A, then the plain quoted digits; other lengths → the plain
+   quoted digits. Stop at the first candidate that returns hits.
+2. Because hits carry no barcode, open the label of the top hits (at most **5**, on-market and newest first) and keep only those whose
+   `upcSku`, with spaces and dashes removed, equals the scanned digits (a leading zero difference between UPC-A and EAN-13 is allowed).
+   The newest label not marked off market wins; several versions of one barcode are handled.
+3. Hits but no matching barcode → "NIH has similar products but not this barcode", then Open Food Facts / USDA, then the photo prompt.
+
+Limits we apply: a scan costs at most 3 searches + 5 label reads (cached for a day when found, 10 minutes when not); server budget
+`NUTRITION_DSLD_HOURLY_CAP` (300), `NUTRITION_DSLD_DAILY_CAP` (3000), `NUTRITION_DSLD_USER_HOURLY_CAP` (60) in `DATA_DIR/dsld-usage.json`;
+`NUTRITION_DSLD_BASE` points at a mirror; timeouts with one retry; plain-word errors. Public domain; the app shows the NIH attribution
+wherever DSLD data appears. A bulk index (the NIH download of ~215,000 labels) was **not** built. Re-check from a machine that can reach
+the host with `node api/scripts/verify-dsld.mjs [UPC]`. Still unverified: the real rate limit.
 
 ## Routes
 `POST /api/nutrition/label` (photos, hint), `POST /api/nutrition/micros/label` (`{date,id,micros,overwrite?}`), `GET /api/nutrition/barcode?kind=supplement`,

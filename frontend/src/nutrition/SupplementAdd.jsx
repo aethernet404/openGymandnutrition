@@ -65,7 +65,7 @@ function BarcodeView({ date, onBack, onDone, close }) {
     {d?.found && <Button variant="primary" onClick={() => setLabel({ initial: formOfHit({ ...d.product, upc: d.product.upc || res.code }), source: d.via })}>{nt('Check and add it')}</Button>}
     {d?.found && d.via === 'dsld' && <NihCredit />}
     {d && !d.found && <>
-      <div className="nut-banner info"><Icon name="info" /><span>{d.incomplete ? nt('Barcode {0} was not found, but a database could not be reached, so it may still exist.', res.code) : nt('Barcode {0} is not in any supplement database we can ask.', res.code)}{res.warn ? ' ' + nt('Its check digit does not add up, so look for a typo.') : ''}</span></div>
+      <div className="nut-banner info"><Icon name="info" /><span>{d.incomplete ? nt('Barcode {0} was not found, but a database could not be reached, so it may still exist.', res.code) : nt('Barcode {0} is not in any supplement database we can ask.', res.code)}{res.warn ? ' ' + nt('Its check digit does not add up, so look for a typo.') : ''}{d.tried?.some(t => t.note) ? ' ' + nt('NIH has similar products but not this barcode.') : ''}</span></div>
       <Button variant="primary" icon="camera" onClick={() => setLabel({ upc: res.code })}>{nt('Photograph the label instead')}</Button>
     </>}
   </>

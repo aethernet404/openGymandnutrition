@@ -59,7 +59,7 @@ timeout each. Mirrors/tests: `NUTRITION_OFF_BASE`, `NUTRITION_USDA_BASE`. AI log
 destination: the Claude runtime talks to Anthropic exactly as the Coach does.
 
 ## Labels from photos and supplement barcodes
-`label.js` (validation, synonyms, unit conversion, consistency checks), `dsld.js` (NIH DSLD parsing), routes `POST /label`, `POST /micros/label`, `GET /barcode?kind=supplement`, `GET /supplements/search|label`. DSLD env: `NUTRITION_DSLD_BASE`, `NUTRITION_DSLD_HOURLY_CAP|DAILY_CAP|USER_HOURLY_CAP`. Unverified against the live API: `node scripts/verify-dsld.mjs`. See `docs/NUTRITION_LABELS.md`.
+`label.js` (validation, synonyms, unit conversion, consistency checks), `dsld.js` (NIH DSLD parsing), routes `POST /label`, `POST /micros/label`, `GET /barcode?kind=supplement`, `GET /supplements/search|label`. DSLD env: `NUTRITION_DSLD_BASE`, `NUTRITION_DSLD_HOURLY_CAP|DAILY_CAP|USER_HOURLY_CAP`. Checked live 2026-10-21 (no key; barcodes spaced; quoted spaced search; hits carry no barcode): `node scripts/verify-dsld.mjs`. See `docs/NUTRITION_LABELS.md`.
 
 ## Files in this module
 `routes.js` (HTTP), `store.js` (per-profile file, write queue), `validate.js`, `config.js` (admin settings),

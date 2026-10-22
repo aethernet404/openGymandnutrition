@@ -265,6 +265,16 @@ describe('Add supplement: four ways in', () => {
     expect(host.textContent).toContain('Barcode: 012345678905')
   })
 
+  it('NIH answered with similar products but not this barcode: the note is shown with the photo option', async () => {
+    m.api.lookupBarcode.mockResolvedValue({ code: '031604026974', found: false, reason: 'unknown', tried: [{ source: 'dsld', ok: true, found: false, note: 'NIH has similar products but not this barcode.' }] })
+    await sheet()
+    await click(byText('button', 'Scan barcode'))
+    await setValue(host.querySelector('input[inputmode="numeric"]'), '031604026974')
+    await click([...host.querySelectorAll('button')].find(b => /look|use|go/i.test(b.textContent)))
+    expect(host.textContent).toContain('NIH has similar products but not this barcode.')
+    expect(byText('button', 'Photograph the label instead')).toBeTruthy()
+  })
+
   it('Search by name: results with the NIH credit, one label opens in the review', async () => {
     m.api.searchSupplements.mockResolvedValue({ results: [{ id: '77', name: 'Vitamin D3 2000 IU', brand: 'Brightwell', offMarket: false }, { id: '78', name: 'Vitamin D3 old', brand: 'Brightwell', offMarket: true }] })
     m.api.getSupplementLabel.mockResolvedValue({ product: HIT })

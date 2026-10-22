@@ -448,7 +448,8 @@ export function createLookup({
 
   /* ----- supplement barcodes: NIH DSLD, then USDA Branded (Open Food Facts is barcode() above) ----- */
 
-  /** A request to the NIH DSLD, counted against its budget first. No key is sent (none is documented in anything I could read). */
+  const DSLD_LABELS = 5;                 // labels read per barcode: search hits have no barcode, so each candidate is opened
+  /** A request to the NIH DSLD, counted against its budget first. No key is sent (none is needed: checked live 2026-10-21). */
   function dsldFetch(url, deadline, uid) {
     const over = dsldBudget?.take(uid);
     if (over) return Promise.reject(new LookupError('limit', 'DSLD budget: ' + over, DSLD_TEXT[over]()));
@@ -456,28 +457,37 @@ export function createLookup({
   }
 
   /**
-   * The label for this barcode in DSLD: search-filter with the digits in quotes (what the API guide says to do for a barcode),
-   * then each candidate's label confirms the UPC; the newest label still on the market wins.
-   * @returns {Promise<{found:boolean, product?:object}>} (throws LookupError when DSLD cannot answer)
+   * The label for this barcode in DSLD. Search hits carry NO barcode, and DSLD stores it spaced, so: search the quoted, spaced forms
+   * (dsld.upcQueries, at most 3 calls, stopping at the first that returns hits), then read the label of the top hits (at most
+   * DSLD_LABELS) and keep only those whose own barcode equals the scanned one; the newest label still on the market wins.
+   * `{ found:false, similar:true }` = NIH answered with products but none has this barcode.
+   * @returns {Promise<{found:boolean, similar?:boolean, product?:object}>} (throws LookupError when DSLD cannot answer)
    */
   async function dsldByUpc(code, { uid = null } = {}) {
     const key = 'dsld|' + code;
     const hit = recall(key); if (hit) return hit;
     const deadline = now() + budgetMs * 2;
-    const s = await dsldFetch(`${dsld.base()}/search-filter?q=${encodeURIComponent('"' + code + '"')}`, deadline, uid);
-    const hits = s.notFound ? [] : dsld.parseSearch(s.data);
-    if (!hits) { logShape('NIH DSLD', 'search', s.status, s.data, now); throw new LookupError('bad', 'unexpected shape'); }
-    const cands = hits.filter(h => !h.upc || dsld.sameBarcode(h.upc, code)).slice(0, 4);
+    let hits = [];
+    for (const q of dsld.upcQueries(code)) {
+      const s = await dsldFetch(`${dsld.base()}/search-filter?q=${encodeURIComponent(q)}`, deadline, uid);
+      const got = s.notFound ? [] : dsld.parseSearch(s.data);
+      if (!got) { logShape('NIH DSLD', 'search', s.status, s.data, now); throw new LookupError('bad', 'unexpected shape'); }
+      if (got.length) { hits = got; break; }
+    }
+    const cands = hits.filter(h => !h.upc || dsld.sameBarcode(h.upc, code)).sort((a, b) => (a.offMarket ? 1 : 0) - (b.offMarket ? 1 : 0) || (b.date > a.date ? 1 : b.date < a.date ? -1 : 0)).slice(0, DSLD_LABELS);
     const labels = [];
+    let failed = null;
     for (const c of cands) {
       try {
         const r = await dsldFetch(`${dsld.base()}/label/${encodeURIComponent(c.id)}`, deadline, uid);
         const l = r.notFound ? null : dsld.parseLabel(r.data && typeof r.data === 'object' ? { id: c.id, ...r.data } : null);
         if (l && dsld.sameBarcode(l.upc, code)) labels.push({ ...l, id: l.id || c.id });
-      } catch (e) { if (!labels.length && c === cands[cands.length - 1]) throw e; }
+      } catch (e) { failed = e; }
     }
     const best = dsld.pickBest(labels);
-    return remember(key, best ? { found: true, product: dsld.hitOfLabel(best), versions: labels.length } : { found: false }, best ? BARCODE_TTL : 10 * 60000);
+    if (!best && failed && cands.length) throw failed;                 // a label could not be read and none matched: not "not found"
+    const out = best ? { found: true, product: dsld.hitOfLabel(best), versions: labels.length } : { found: false, ...(hits.length ? { similar: true } : {}) };
+    return remember(key, out, best ? BARCODE_TTL : 10 * 60000);
   }
 
   /** A name search in DSLD: up to 15 labels (name, brand, barcode, whether off the market), newest on-market first. */

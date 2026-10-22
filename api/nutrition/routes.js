@@ -374,7 +374,7 @@ export function nutritionRoutes({
       if (!supplement) return json(res, 200, { code, ...(await lookup.barcode(code)) });
       const tried = [];
       const attempt = async (source, label, fn) => {
-        try { const r = await fn(); tried.push({ source, ok: true, found: !!r.found }); return r.found ? r : null; }
+        try { const r = await fn(); tried.push({ source, ok: true, found: !!r.found, ...(r.similar ? { note: 'NIH has similar products but not this barcode.' } : {}) }); return r.found ? r : null; }
         catch (e) { tried.push({ source, ok: false, kind: e?.kind || 'down', error: e instanceof LookupError ? describeFailure(label, e) : `${label} could not be reached.` }); return null; }
       };
       let hit = await attempt('dsld', 'NIH supplement database', () => lookup.dsldByUpc(code, { uid: user.id }));

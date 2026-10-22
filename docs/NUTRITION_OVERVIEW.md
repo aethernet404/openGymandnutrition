@@ -125,7 +125,7 @@ chips for the common ones), save it to **My supplements**, and keep a **usual st
 tap. Supplements are listed apart from food, have no calories by default, and can be summed with food on the
 Micronutrients card. Upper limits that apply to supplements only (magnesium, niacin, folic acid, vitamin E,
 preformed vitamin A) are compared with the supplement total. Add supplement now offers Scan barcode, Photo of the label, Search (NIH database) and Manual; labels are read from photos
-by the AI into a review you confirm. See `docs/NUTRITION_LABELS.md` (the NIH API could not be verified from the build environment).
+by the AI into a review you confirm. See `docs/NUTRITION_LABELS.md` (the NIH API was checked live: no key needed, barcodes searched in their spaced form).
 
 ### Apple Health: Health Auto Export (and the Shortcut route)
 A web page cannot read Apple Health, so the iPhone sends it. openGym accepts two ways, both with the same

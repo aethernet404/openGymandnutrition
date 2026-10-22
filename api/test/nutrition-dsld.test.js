@@ -1,5 +1,6 @@
 /* The NIH supplement label database client and the supplement barcode lookup order. The DSLD answers here are FIXTURES shaped like the
-   API guide describes them: the live service could not be reached when this was written (see scripts/verify-dsld.mjs). */
+   live service as checked on 2026-10-21 (see scripts/verify-dsld.mjs): search hits carry NO barcode; a label's upcSku is a SPACED string;
+   only a QUOTED, SPACED search ("0 31604 02697 4") finds a label by barcode; the bare digits find nothing. */
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { tempData } from './helpers.mjs';
@@ -14,15 +15,18 @@ const ncfg = await import('../nutrition/config.js');
 
 const json = (body, status = 200) => ({ ok: status < 400, status, text: async () => JSON.stringify(body) });
 const UPC = '012345678905';
-const hit = (id, extra = {}) => ({ _id: String(id), _source: { fullName: 'Daily Multi', brandName: 'Brightwell', upcSku: UPC, offMarket: 0, entryDate: '2020-01-01', ...extra } });
-const SEARCH = { hits: { total: 4, hits: [hit(1001, { entryDate: '2019-03-01' }), hit(1002, { entryDate: '2022-05-01', offMarket: 1 }), hit(1003, { entryDate: '2021-01-01', upcSku: '0 12345-67890 5' }), hit(1004, { fullName: 'Other thing', upcSku: '999999999999' })] } };
+const hit = (id, extra = {}) => ({ _id: String(id), _source: { fullName: 'Daily Multi', brandName: 'Brightwell', offMarket: 0, entryDate: '2020-01-01', ...extra } });
+const SEARCH = { hits: { total: 4, hits: [hit(1001, { entryDate: '2019-03-01' }), hit(1002, { entryDate: '2022-05-01', offMarket: 1 }), hit(1003, { entryDate: '2021-01-01' }), hit(1004, { fullName: 'Other thing' })] } };
 const row = (name, qty, unit, extra = {}) => ({ name, quantity: [{ servingSizeOrder: 1, quantity: qty, unit, ...(extra.pct ? { dailyValueTargetGroup: [{ percent: extra.pct }] } : {}) }], forms: extra.form ? [{ name: extra.form }] : [], nestedRows: extra.nested || [] });
-const LABEL = id => ({ id: Number(id), fullName: 'Daily Multi', brandName: 'Brightwell', upcSku: id === '1003' ? '0 12345-67890 5' : UPC, offMarket: id === '1002' ? 1 : 0, entryDate: { 1001: '2019-03-01', 1002: '2022-05-01', 1003: '2021-01-01' }[id] || '2020-01-01',
+const LABEL = id => ({ id: Number(id), fullName: 'Daily Multi', brandName: 'Brightwell', upcSku: id === '1004' ? '9 99999 99999 9' : id === '1003' ? '0 12345-67890 5' : '0 12345 67890 5', offMarket: id === '1002' ? 1 : 0, entryDate: { 1001: '2019-03-01', 1002: '2022-05-01', 1003: '2021-01-01' }[id] || '2020-01-01',
   servingSizes: [{ order: 1, minQuantity: 2, maxQuantity: 2, unit: 'Capsule(s)' }], servingsPerContainer: 30,
   ingredientRows: [row('Vitamin D3', 1000, 'IU', { pct: 125, form: 'Cholecalciferol' }), row('Vitamin C', 90, 'mg', { pct: 100 }), row('Folate', 400, 'mcg DFE'), row('Calories', 5, 'Calorie(s)'), row('Creatine Monohydrate', 3, 'Gram(s)'), row('Blend', null, '', { nested: [row('Ashwagandha', 300, 'mg')] })],
   otherIngredients: { text: 'Gelatin, rice flour.' } });
 
-function fakeNet({ search = () => json(SEARCH), label = id => json(LABEL(id)), off = () => json({ status: 0 }), usda = () => json({ foods: [] }) } = {}) {
+const SPACED = '"0 12345 67890 5"';
+/** The live behaviour: only the quoted, spaced form finds the labels; anything else answers with no hits. */
+const realSearch = url => (new URL(url).searchParams.get('q') === SPACED ? json(SEARCH) : json({ hits: { total: 0, hits: [] } }));
+function fakeNet({ search = realSearch, label = id => json(LABEL(id)), off = () => json({ status: 0 }), usda = () => json({ foods: [] }) } = {}) {
   const f = { urls: [], dsld: 0, off: 0, usda: 0 };
   f.fetch = async (url, init = {}) => {
     url = String(url); f.urls.push(url);
@@ -75,15 +79,74 @@ test('a label becomes a hit: serving, supplement facts mapped to our nutrients w
 
 /* ------------------------------ the lookup ------------------------------ */
 
-test('UPC search: digits in quotes, each candidate’s label confirms the barcode, the right version is chosen; the unrelated one is ignored', async () => {
+test('UPC search: the quoted SPACED form is searched; hits have no barcode, so labels are opened and compared; the right version is chosen; the unrelated one is ignored', async () => {
   const f = fakeNet();
   const r = await mk(f).dsldByUpc(UPC);
   assert.equal(r.found, true);
   assert.equal(r.product.ext, '1003');
-  const search = f.urls.find(u => u.includes('search-filter'));
-  assert.equal(new URL(search).searchParams.get('q'), `"${UPC}"`);
-  assert.ok(!f.urls.some(u => u.includes('/label/1004')), 'a hit with another barcode is not even fetched');
-  assert.equal(r.versions, 3);
+  const searches = f.urls.filter(u => u.includes('search-filter')).map(u => new URL(u).searchParams.get('q'));
+  assert.deepEqual(searches, [SPACED], 'the first candidate found them, so no second search');
+  assert.ok(f.urls.some(u => u.includes('/label/1004')), 'a hit has no barcode, so it is opened to see');
+  assert.equal(r.versions, 3, 'the other product (1004) has another barcode and is dropped');
+});
+
+test('the candidates: 12 digits → spaced 1-5-5-1 then the plain quoted digits; 13 digits starting with 0 → its 12-digit spaced form then the plain digits; other lengths → plain digits; never more than 3', () => {
+  assert.deepEqual(D.upcQueries('031604026974'), ['"0 31604 02697 4"', '"031604026974"']);
+  assert.deepEqual(D.upcQueries('0031604026974'), ['"0 31604 02697 4"', '"0031604026974"']);
+  assert.deepEqual(D.upcQueries('4006381333931'), ['"4006381333931"']);
+  assert.deepEqual(D.upcQueries('96385074'), ['"96385074"']);
+  assert.deepEqual(D.upcQueries('abc'), []);
+  assert.ok(D.upcQueries('031604026974').length <= D.MAX_UPC_QUERIES);
+});
+
+test('the live examples: label 179744 "Ultra Fish Oil 1400 mg" and label 1225 "Calcium With Vitamin D3" are found by their scanned digits (digits-only search returns nothing)', async () => {
+  const LIVE = { '"0 31604 02697 4"': 179744, '"0 74312 76274 1"': 1225 };
+  const NAME = { 179744: 'Ultra Fish Oil 1400 mg', 1225: 'Calcium With Vitamin D3' };
+  const UPCSKU = { 179744: '0 31604 02697 4', 1225: '0 74312 76274 1' };
+  const f = fakeNet({
+    search: url => { const id = LIVE[new URL(url).searchParams.get('q')]; return json({ hits: { total: id ? 1 : 0, hits: id ? [{ _id: String(id), _source: { fullName: NAME[id], brandName: 'Nature Made', offMarket: 0 } }] : [] } }); },
+    label: id => json({ id: Number(id), fullName: NAME[id], brandName: 'Nature Made', upcSku: UPCSKU[id], offMarket: 0, entryDate: '2021-02-02', servingSizes: [{ minQuantity: 1, unit: 'Softgel(s)' }], ingredientRows: [] })
+  });
+  const lk = mk(f);
+  const a = await lk.dsldByUpc('031604026974');
+  assert.deepEqual([a.found, a.product.ext, a.product.name, a.product.upc], [true, '179744', 'Ultra Fish Oil 1400 mg', '031604026974']);
+  assert.equal((await lk.dsldByUpc('074312762741')).product.ext, '1225');
+  assert.equal(f.dsld, 4, 'each barcode: one search and one label');
+  const qs = f.urls.filter(u => u.includes('search-filter')).map(u => new URL(u).searchParams.get('q'));
+  assert.ok(!qs.includes('031604026974') && !qs.includes('"031604026974"'), 'the digits-only query was never needed');
+});
+
+test('a 13-digit EAN that starts with 0 is searched by its 12-digit spaced form; a real EAN-13 is searched as plain quoted digits', async () => {
+  const f = fakeNet();
+  assert.equal((await mk(f).dsldByUpc('0012345678905')).found, true);
+  assert.equal(new URL(f.urls[0]).searchParams.get('q'), SPACED);
+  const g = fakeNet({ search: () => json({ hits: { hits: [] } }) });
+  assert.deepEqual(await mk(g).dsldByUpc('4006381333931'), { found: false });
+  assert.deepEqual(g.urls.map(u => new URL(u).searchParams.get('q')), ['"4006381333931"']);
+});
+
+test('a barcode with no match: every candidate is searched (at most 3 calls), no label is opened, and the answer is a plain "not found"', async () => {
+  const f = fakeNet();
+  const r = await mk(f).dsldByUpc('999999999999');
+  assert.deepEqual(r, { found: false });
+  assert.equal(f.dsld, 2); assert.ok(f.dsld <= 3);
+  assert.ok(!f.urls.some(u => u.includes('/label/')));
+});
+
+test('hits that are similar products but none has this barcode: not found, flagged "similar", and no more than 5 labels are opened', async () => {
+  const many = { hits: { hits: Array.from({ length: 12 }, (_, i) => hit(2000 + i)) } };
+  const f = fakeNet({ search: () => json(many), label: id => json({ ...LABEL('1001'), id: Number(id), upcSku: '1 11111 11111 1' }) });
+  const r = await mk(f).dsldByUpc(UPC);
+  assert.deepEqual([r.found, r.similar], [false, true]);
+  assert.equal(f.urls.filter(u => u.includes('/label/')).length, 5);
+});
+
+test('the route says "NIH has similar products but not this barcode" and falls through to Open Food Facts', async () => {
+  const f = fakeNet({ search: () => json({ hits: { hits: [hit(2000)] } }), label: id => json({ ...LABEL('1001'), id: Number(id), upcSku: '1 11111 11111 1' }), off: () => json({ status: 0 }) });
+  const r = await setup(f).scan(UPC);
+  assert.equal(r.out.found, false);
+  assert.equal(r.out.tried.find(t => t.source === 'dsld').note, 'NIH has similar products but not this barcode.');
+  assert.equal(f.off, 1);
 });
 
 test('EAN-13 and UPC-A spellings find the same label; nothing found is a plain "not found"; results are cached', async () => {
@@ -93,8 +156,6 @@ test('EAN-13 and UPC-A spellings find the same label; nothing found is a plain "
   const n = f.dsld;
   await lk.dsldByUpc('0012345678905');
   assert.equal(f.dsld, n, 'the second ask is served from memory');
-  const g = fakeNet({ search: () => json({ hits: { hits: [] } }) });
-  assert.deepEqual(await mk(g).dsldByUpc('999999999999'), { found: false });
   const h = fakeNet({ label: () => json({ id: 1, fullName: 'Other', upcSku: '111111111111' }) });
   assert.equal((await mk(h).dsldByUpc(UPC)).found, false, 'a label whose own barcode differs does not count');
 });
@@ -197,7 +258,7 @@ test('a food barcode: my saved food with that barcode first, then Open Food Fact
 });
 
 test('supplement search by name and one label by id: newest on-market first, plain-word failures, ids are digits only', async () => {
-  const f = fakeNet();
+  const f = fakeNet({ search: () => json(SEARCH) });          // a name search, unlike a barcode search, answers with the products
   const t = setup(f);
   const s = await t.call('GET /api/nutrition/supplements/search', { url: '/api/nutrition/supplements/search?q=daily%20multi' });
   assert.equal(s.status, 200, JSON.stringify(s.out));
