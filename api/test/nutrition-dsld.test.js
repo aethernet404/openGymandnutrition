@@ -195,3 +195,20 @@ test('a food barcode: my saved food with that barcode first, then Open Food Fact
   const o = await setup(g).scan('111111111116', 'food');
   assert.deepEqual([o.out.found, g.dsld, g.off], [false, 0, 1]);
 });
+
+test('supplement search by name and one label by id: newest on-market first, plain-word failures, ids are digits only', async () => {
+  const f = fakeNet();
+  const t = setup(f);
+  const s = await t.call('GET /api/nutrition/supplements/search', { url: '/api/nutrition/supplements/search?q=daily%20multi' });
+  assert.equal(s.status, 200, JSON.stringify(s.out));
+  assert.deepEqual(s.out.results.slice(0, 3).map(r => [r.id, r.offMarket]), [['1003', false], ['1004', false], ['1001', false]]);
+  assert.equal(s.out.results.at(-1).id, '1002', 'the off-market one last');
+  assert.match(s.out.attribution, /NIH/);
+  assert.equal((await t.call('GET /api/nutrition/supplements/search', { url: '/api/nutrition/supplements/search?q=ab' })).status, 400);
+  const l = await t.call('GET /api/nutrition/supplements/label', { url: '/api/nutrition/supplements/label?id=1003' });
+  assert.deepEqual([l.status, l.out.product.source, l.out.product.bases[0].micros.vit_d_mcg], [200, 'dsld', 25]);
+  for (const bad of ['abc', '../x', '1;2', '']) assert.equal((await t.call('GET /api/nutrition/supplements/label', { url: '/api/nutrition/supplements/label?id=' + encodeURIComponent(bad) })).status, 400, bad);
+  const down = setup(fakeNet({ search: () => ({ ok: false, status: 429, text: async () => '' }) }));
+  const e = await down.call('GET /api/nutrition/supplements/search', { url: '/api/nutrition/supplements/search?q=vitamin%20c' });
+  assert.deepEqual([e.status, e.out.kind, /rate-limiting/.test(e.out.error)], [502, 'rate', true]);
+});

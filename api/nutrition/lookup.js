@@ -480,6 +480,27 @@ export function createLookup({
     return remember(key, best ? { found: true, product: dsld.hitOfLabel(best), versions: labels.length } : { found: false }, best ? BARCODE_TTL : 10 * 60000);
   }
 
+  /** A name search in DSLD: up to 15 labels (name, brand, barcode, whether off the market), newest on-market first. */
+  async function dsldSearch(q, { uid = null } = {}) {
+    const key = 'dsldq|' + q.toLowerCase();
+    const hit = recall(key); if (hit) return hit;
+    const r = await dsldFetch(`${dsld.base()}/search-filter?q=${encodeURIComponent(q)}`, now() + budgetMs * 2, uid);
+    const hits = r.notFound ? [] : dsld.parseSearch(r.data);
+    if (!hits) { logShape('NIH DSLD', 'search', r.status, r.data, now); throw new LookupError('bad', 'unexpected shape'); }
+    const list = [...hits].sort((a, b) => (a.offMarket ? 1 : 0) - (b.offMarket ? 1 : 0) || (b.date > a.date ? 1 : b.date < a.date ? -1 : 0)).slice(0, 15);
+    return remember(key, list, SEARCH_TTL);
+  }
+
+  /** One DSLD label by its id, as a lookup hit, or null. */
+  async function dsldLabel(id, { uid = null } = {}) {
+    if (!/^\d{1,12}$/.test(String(id))) return null;
+    const key = 'dsldl|' + id;
+    const hit = recall(key); if (hit !== undefined) return hit;
+    const r = await dsldFetch(`${dsld.base()}/label/${id}`, now() + budgetMs * 2, uid);
+    const l = r.notFound ? null : dsld.parseLabel(r.data && typeof r.data === 'object' ? { id, ...r.data } : null);
+    return remember(key, l ? dsld.hitOfLabel({ ...l, id: l.id || String(id) }) : null, BARCODE_TTL);
+  }
+
   /** A USDA Branded food by its barcode (the search takes the digits), or { found:false }. */
   async function usdaByUpc(code, apiKey, { uid = null } = {}) {
     const key = 'usdaupc|' + code;
@@ -490,7 +511,7 @@ export function createLookup({
     return remember(key, n ? { found: true, product: { ...n, upc: code } } : { found: false }, n ? BARCODE_TTL : 10 * 60000);
   }
 
-  return { search, barcode, dsldByUpc, usdaByUpc, usdaCandidates, usdaFood, _cache: cache };
+  return { search, barcode, dsldByUpc, dsldSearch, dsldLabel, usdaByUpc, usdaCandidates, usdaFood, _cache: cache };
 }
 
 /** A barcode as typed or scanned: digits only, 8–14 of them (EAN-8, UPC-A, EAN-13, GTIN-14). */

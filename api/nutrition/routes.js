@@ -389,6 +389,25 @@ export function nutritionRoutes({
       json(res, 200, { code, found: false, reason: 'unknown', tried, ...(tried.some(t => !t.ok) ? { incomplete: true } : {}) });
     }),
 
+    // Supplements in the NIH label database by name, and one of its labels by id (for "Search" in Add supplement).
+    'GET /api/nutrition/supplements/search': guarded(async (req, res, user) => {
+      const q = v.clean(query(req).get('q'), 80);
+      if (q.length < 3) return fail(res, 400, 'type at least three letters to search');
+      if (throttled(res, user)) return;
+      try { json(res, 200, { q, results: await lookup.dsldSearch(q, { uid: user.id }), attribution: 'NIH Office of Dietary Supplements, Dietary Supplement Label Database (DSLD)' }); }
+      catch (e) { json(res, 502, { error: e instanceof LookupError ? describeFailure('NIH supplement database', e) : 'The NIH supplement database could not be reached.', kind: e?.kind || 'down' }); }
+    }),
+    'GET /api/nutrition/supplements/label': guarded(async (req, res, user) => {
+      const id = String(query(req).get('id') || '');
+      if (!/^\d{1,12}$/.test(id)) return fail(res, 400, 'a label id is digits');
+      if (throttled(res, user)) return;
+      try {
+        const product = await lookup.dsldLabel(id, { uid: user.id });
+        if (!product) return fail(res, 404, 'the NIH database has no such label');
+        json(res, 200, { product });
+      } catch (e) { json(res, 502, { error: e instanceof LookupError ? describeFailure('NIH supplement database', e) : 'The NIH supplement database could not be reached.', kind: e?.kind || 'down' }); }
+    }),
+
     /* ----- Apple Health, via a Shortcut ----- */
 
     // THE ONLY ROUTE THAT TAKES THE APPLE HEALTH TOKEN. No session, no cookie: a Bearer token made in
