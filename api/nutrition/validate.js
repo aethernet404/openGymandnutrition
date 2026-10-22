@@ -7,6 +7,7 @@
  */
 
 import { microsOf, hasMicros } from './micros.js';
+import { MAX_OTHER, text as labelText } from './label.js';
 
 export const MEALS = ['breakfast', 'lunch', 'dinner', 'snack'];
 // The supplements section of a day is a meal of its own for entries (not a meal you can pick for food).
@@ -15,7 +16,7 @@ export const ENTRY_MEALS = [...MEALS, SUPPLEMENT_MEAL];
 export const SOURCES = ['manual', 'quick', 'food', 'ai', 'supplement'];
 export const FOOD_SOURCES = ['custom', 'off', 'usda', 'fatsecret', 'ai'];
 // Where a saved (custom) food's numbers came from, beyond "typed by hand": 'ai' = an AI estimate the person confirmed and saved.
-export const FOOD_ORIGINS = ['ai'];
+export const FOOD_ORIGINS = ['ai', 'label'];       // 'label': read from the person's photos of a label (and checked by them)
 export const CONFIDENCE = ['low', 'medium', 'high'];
 
 export const LIMITS = {
@@ -145,10 +146,37 @@ export function food(body, { partial = false } = {}) {
     if (body.origin !== null && !FOOD_ORIGINS.includes(body.origin)) return bad(`origin must be one of ${FOOD_ORIGINS.join(', ')}`);
     out.origin = body.origin;
   }
+  // The barcode digits of a saved food or supplement (so a scan finds it again), and its "other ingredients": things that are
+  // not one of our 29 nutrients (creatine, plant extracts, probiotics in CFU...), shown but never counted in any total.
+  if (body.upc !== undefined) {
+    if (body.upc !== null && !/^\d{8,14}$/.test(String(body.upc))) return bad('upc must be 8 to 14 digits');
+    out.upc = body.upc == null ? null : String(body.upc);
+  }
+  if (body.otherIngredients !== undefined) {
+    const o = otherIngredients(body.otherIngredients);
+    if (!o.ok) return o;
+    out.otherIngredients = o.value;
+  }
   if (body.ext !== undefined) out.ext = body.ext == null ? null : clean(body.ext, LIMITS.ext) || null;
   if (body.favorite !== undefined) {
     if (typeof body.favorite !== 'boolean') return bad('favorite must be true or false');
     out.favorite = body.favorite;
+  }
+  return good(out);
+}
+
+/** [{ name, amount, unit }]: at most MAX_OTHER, names 1-60 characters of plain text, an amount from 0 up (or none), a short unit. */
+export function otherIngredients(list) {
+  if (list == null) return good([]);
+  if (!Array.isArray(list)) return bad('otherIngredients must be a list');
+  if (list.length > MAX_OTHER) return bad(`otherIngredients can hold at most ${MAX_OTHER} items`);
+  const out = [];
+  for (const o of list) {
+    if (!isObj(o)) return bad('each other ingredient must be an object');
+    const name = labelText(o.name, 60);
+    if (!name) return bad('an other ingredient needs a name');
+    if (o.amount != null && (!isNum(o.amount) || o.amount < 0 || o.amount > 1e9)) return bad(`${name}: the amount must be a number from 0 up`);
+    out.push({ name, amount: o.amount ?? null, unit: labelText(o.unit, 16) });
   }
   return good(out);
 }
@@ -227,6 +255,11 @@ export function entry(body, { partial = false, foodGiven = false } = {}) {
   if (body.foodId !== undefined) {
     if (body.foodId !== null && !validId(body.foodId)) return bad('foodId is not valid');
     out.foodId = body.foodId;
+  }
+  // Where the entry's own micronutrients came from, when not a food database: 'label' = read from the person's photo of the label.
+  if (body.microsSource !== undefined) {
+    if (body.microsSource !== null && body.microsSource !== 'label') return bad('microsSource must be "label" or empty');
+    out.microsSource = body.microsSource;
   }
   if (body.note !== undefined) out.note = clean(body.note, 200);
 

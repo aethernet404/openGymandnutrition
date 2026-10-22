@@ -25,6 +25,9 @@ import { makeJobDir, removeJobDir } from './jobdir.js';
 
 export const MAX_IMAGE_BYTES = 3 * 1024 * 1024;
 export const MAX_NOTE = 300;
+// Label photos: 1 to 4, each at most MAX_IMAGE_BYTES, together at most MAX_LABEL_BYTES, so that the JSON body stays under the server's 5 MB.
+export const MAX_LABEL_PHOTOS = 4;
+export const MAX_LABEL_BYTES = Math.floor(3.3 * 1024 * 1024);
 export const MAX_TEXT = 500;
 const BUDGET_MS = Math.min(COACH_TIMEOUT_MS, 90000);       // never longer than the Coach's own limit
 const MIN_REPAIR_MS = 10000;                                // not worth a second call with less than this left
@@ -74,6 +77,28 @@ export function checkInput(body) {
     return { ok: true, mode: 'inline', image: { mediaType, data }, note };
   }
   return { ok: false, error: 'kind must be photo or text' };
+}
+
+/** { photos: [base64…], hint?, note? } → { ok, images, hint, note } or { ok:false, error }. Each photo is sniffed by its bytes. */
+export function checkLabelInput(body) {
+  if (!body || typeof body !== 'object' || !Array.isArray(body.photos) || !body.photos.length) return { ok: false, error: 'send 1 to 4 photos of the label' };
+  if (body.photos.length > MAX_LABEL_PHOTOS) return { ok: false, error: `at most ${MAX_LABEL_PHOTOS} photos` };
+  const images = [];
+  let total = 0;
+  for (const p of body.photos) {
+    const b64 = typeof p === 'string' ? p.replace(/^data:[^,]*,/, '') : '';
+    if (!b64 || b64.length > Math.ceil(MAX_IMAGE_BYTES * 4 / 3) + 8 || !/^[A-Za-z0-9+/]+={0,2}$/.test(b64)) return { ok: false, error: 'a photo is missing, too large, or not valid base64' };
+    const data = Buffer.from(b64, 'base64');
+    if (!data.length || data.length > MAX_IMAGE_BYTES) return { ok: false, error: 'a photo is too large' };
+    const mediaType = sniffImageType(data);
+    if (!mediaType) return { ok: false, error: 'the photos must be JPEG, PNG, WebP or GIF' };
+    total += data.length;
+    images.push({ mediaType, data });
+  }
+  if (total > MAX_LABEL_BYTES) return { ok: false, error: 'the photos together are too large; use fewer or smaller photos' };
+  const hint = body.hint === 'food' || body.hint === 'supplement' ? body.hint : 'auto';
+  const note = String(body.note ?? '').replace(/[\u0000-\u001f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, MAX_NOTE);
+  return { ok: true, images, hint, note };
 }
 
 export function createAnalyzer({ invoke = invokeMeal, now = Date.now, budgetMs = BUDGET_MS } = {}) {
@@ -130,9 +155,9 @@ export function createAnalyzer({ invoke = invokeMeal, now = Date.now, budgetMs =
    * credential, same refund rules as analyze(); `result` is whatever validate accepted.
    * @returns {Promise<{ok:true, result:any, ms:number, calls:number} | {ok:false, code:string, refund:boolean, detail?:string}>}
    */
-  function ask(uid, { prompt, systemPrompt, validate }) {
+  function ask(uid, { prompt, systemPrompt, validate, images = null }) {
     return guarded(uid, async ctx => {
-      const r = await runMealPipeline(send(ctx, { mode: 'text', promptText: prompt, systemPrompt }), validate);
+      const r = await runMealPipeline(send(ctx, images?.length ? { mode: 'inline', images, promptText: prompt, systemPrompt } : { mode: 'text', promptText: prompt, systemPrompt }), validate);
       if (!r.ok) return { ok: false, code: r.errorClass, refund: FAILURES[r.errorClass]?.refund ?? false, detail: r.detail };
       return { ok: true, result: r.meal, ms: now() - ctx.t0, calls: r.attempts };
     });

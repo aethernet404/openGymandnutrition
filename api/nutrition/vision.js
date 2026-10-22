@@ -35,15 +35,17 @@ const spawnAsCoach = ({ command, args, cwd, env, signal }) =>
   spawn(command, args, { cwd, env, signal, stdio: ['pipe', 'pipe', 'pipe'], ...(unprivilegedIds() || {}) });
 
 /** The prompt the SDK takes: a string, or (for an image) a one-message stream. */
-export function buildPrompt({ mode, image, imageFile, note, description, repair, promptText }) {
+export function buildPrompt({ mode, image, images, imageFile, note, description, repair, promptText }) {
   const tail = repair ? repairSuffix(repair.previous, repair.errors) : '';
-  if (promptText) return promptText + tail;          // a whole prompt written elsewhere (the USDA stand-in picker): text only
+  // A whole prompt written elsewhere (the USDA stand-in picker, the label reader). With images it travels with them.
+  if (promptText && !(images?.length)) return promptText + tail;
   if (mode === 'text') return textPrompt(description) + tail;
   if (mode === 'read') return photoPrompt(note) + `\n\nThe photo is the file ${imageFile} in the working directory. Read it with the Read tool, then answer.` + tail;
-  // inline: one user message, image block first, as the vision docs recommend.
+  // inline: one user message, image blocks first, as the vision docs recommend.
+  const list = images?.length ? images : [image];
   const content = [
-    { type: 'image', source: { type: 'base64', media_type: image.mediaType, data: image.data.toString('base64') } },
-    { type: 'text', text: photoPrompt(note) + tail }
+    ...list.map(img => ({ type: 'image', source: { type: 'base64', media_type: img.mediaType, data: img.data.toString('base64') } })),
+    { type: 'text', text: (promptText || photoPrompt(note)) + tail }
   ];
   return (async function* () {
     yield { type: 'user', parent_tool_use_id: null, message: { role: 'user', content } };
@@ -57,7 +59,7 @@ export function buildPrompt({ mode, image, imageFile, note, description, repair,
  * @param {string} [o.imageFile]   file name inside jobDir (read mode)
  * @returns adapter-shaped { code, text, stderr, timedOut, spawnError }
  */
-export async function invokeMeal({ mode, image, imageFile, note, description, repair, promptText, systemPrompt, jobDir, env, model, timeoutMs, sdk }) {
+export async function invokeMeal({ mode, image, images, imageFile, note, description, repair, promptText, systemPrompt, jobDir, env, model, timeoutMs, sdk }) {
   const m = sdk || await import(PKG).catch(() => null);
   if (!m) return { code: -1, text: '', stderr: `${PKG} is not installed`, timedOut: false, spawnError: true };
 
@@ -80,7 +82,7 @@ export async function invokeMeal({ mode, image, imageFile, note, description, re
 
   try {
     for await (const message of m.query({
-      prompt: buildPrompt({ mode, image, imageFile, note, description, repair, promptText }),
+      prompt: buildPrompt({ mode, image, images, imageFile, note, description, repair, promptText }),
       options: {
         ...LOCKDOWN,
         ...(readOnlyHere || {}),

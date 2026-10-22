@@ -18,9 +18,10 @@ import * as haeDebug from './hae-debug.js';
 import { scaleMicros, microsOf } from './micros.js';
 import * as standin from './standin.js';
 import { redact } from './redact.js';
-import { createUsdaBudget } from './usda-budget.js';
+import { createUsdaBudget, createDsldBudget } from './usda-budget.js';
 import { createWindow, createBackoff } from '../rate-limit.js';
-import { createAnalyzer, availability, checkInput, FAILURES } from './analyze.js';
+import { createAnalyzer, availability, checkInput, checkLabelInput, FAILURES } from './analyze.js';
+import * as label from './label.js';
 
 /** Run `fn` over `list` with at most `n` in flight. */
 async function mapLimit(list, n, fn) {
@@ -31,7 +32,7 @@ async function mapLimit(list, n, fn) {
 // How much JSON each kind of route may be sent (server.js's own ceiling is 5 MB for everything). A photo analysis is the
 // one large one: 3 MB of image is 4 MB as base64. Health Auto Export keeps the full ceiling: its payload grows with
 // the metrics the person chose and is only accepted behind a valid token.
-const BODY = { tiny: 4 * 1024, small: 32 * 1024, entries: 256 * 1024, photo: 4.5 * 1024 * 1024, hae: 5 * 1024 * 1024 };
+const BODY = { tiny: 4 * 1024, small: 32 * 1024, entries: 256 * 1024, photo: 4.5 * 1024 * 1024, label: 4.8 * 1024 * 1024, hae: 5 * 1024 * 1024 };
 // Changes a profile may make per minute (a normal screen makes a handful; a batch of entries is one request).
 const WRITES_PER_MIN = () => { const n = Number(process.env.NUTRITION_WRITES_PER_MINUTE); return Number.isInteger(n) && n >= 1 ? n : 120; };
 
@@ -44,7 +45,8 @@ export function nutritionRoutes({
   fatsecret = createFatSecret({ usage: createUsage({ file: path.join(cfg.dataDir(), 'fatsecret-usage.json') }) }),
   // USDA is one key for everyone: every request to it is counted per hour and per day (usda-budget.js).
   usdaBudget = createUsdaBudget({ file: path.join(cfg.dataDir(), 'usda-usage.json') }),
-  lookup = createLookup({ fatsecret, usdaBudget }),
+  dsldBudget = createDsldBudget({ file: path.join(cfg.dataDir(), 'dsld-usage.json') }),
+  lookup = createLookup({ fatsecret, usdaBudget, dsldBudget }),
   // server.js supplies the address its sign-in throttle counts (proxy headers handled there) and whether a
   // profile still exists and is enabled; the defaults suit tests and a bare node run.
   limitAddress = req => String(req.socket?.remoteAddress || 'unknown'), userActive = () => true
@@ -148,7 +150,7 @@ export function nutritionRoutes({
       const avail = availability(user.id);
       json(res, 200, {
         ai: { limit: c.aiDailyCap, used, remaining: Math.max(0, c.aiDailyCap - used), available: avail.ok && c.aiDailyCap > 0, reason: c.aiDailyCap === 0 ? 'off' : avail.ok ? null : avail.code },
-        lookup: { off: true, usda: c.usdaKeySet, fatsecret: c.fatsecretSet }, meals: v.MEALS,
+        lookup: { off: true, usda: c.usdaKeySet, fatsecret: c.fatsecretSet, dsld: true }, meals: v.MEALS,
         // Whether there is a Coach to share with at all, and whether this profile has chosen to.
         coach: { available: coachCfg.isEnabled() && coachCfg.isConnected(), share: d.coachShare === true },
         health: { ...health.tokenStatus(user.id), eatBack: store.eatBackOf(d) }
@@ -259,11 +261,12 @@ export function nutritionRoutes({
       const check = body.checkDuplicate === true;
       const choice = body.onDuplicate === 'update' || body.onDuplicate === 'new' ? body.onDuplicate : null;
       const out = await store.mutate(user.id, d => {
-        const existing = check ? store.findSavedFood(d, checked.value.name, checked.value.brand, checked.value.type) : null;
+        // The same barcode, or the same name and brand (any case), is the same food.
+        const existing = check ? (store.findByUpc(d, checked.value.upc, checked.value.type) || store.findSavedFood(d, checked.value.name, checked.value.brand, checked.value.type)) : null;
         if (existing && !choice) return { duplicate: existing };
         if (existing && choice === 'update') {
-          const { serving, per, origin, micros } = checked.value;
-          Object.assign(existing, { serving, per }, origin ? { origin } : {}, micros !== undefined ? { micros } : {});
+          const { serving, per, origin, micros, upc, otherIngredients } = checked.value;
+          Object.assign(existing, { serving, per }, origin ? { origin } : {}, micros !== undefined ? { micros } : {}, upc ? { upc } : {}, otherIngredients !== undefined ? { otherIngredients } : {});
           if (existing.micros == null) delete existing.micros;
           return { food: existing, updated: true };
         }
@@ -357,11 +360,33 @@ export function nutritionRoutes({
       catch (e) { json(res, 502, { error: e?.text || 'FatSecret did not answer.', kind: e?.kind || 'down' }); }
     }),
 
+    // A scanned or typed barcode. `kind=supplement` looks in this order and stops at the first good hit: my own saved supplements,
+    // the NIH supplement label database (DSLD), Open Food Facts and USDA Branded, then "not found" (the app offers a photo of the
+    // label). Foods: my own saved foods with that barcode, then Open Food Facts. A source that cannot answer is listed in `tried`
+    // and the next one is asked; the answer is only ever "not found" when every source that could answer said so.
     'GET /api/nutrition/barcode': guarded(async (req, res, user) => {
       const code = cleanBarcode(query(req).get('code'));
       if (!code) return fail(res, 400, 'a barcode is 8 to 14 digits');
+      const supplement = query(req).get('kind') === 'supplement';
+      const mine = store.findByUpc(store.read(user.id), code, supplement ? 'supplement' : null);
+      if (mine) return json(res, 200, { code, found: true, via: 'mine', product: store.savedHit(mine) });
       if (throttled(res, user)) return;
-      json(res, 200, { code, ...(await lookup.barcode(code)) });
+      if (!supplement) return json(res, 200, { code, ...(await lookup.barcode(code)) });
+      const tried = [];
+      const attempt = async (source, label, fn) => {
+        try { const r = await fn(); tried.push({ source, ok: true, found: !!r.found }); return r.found ? r : null; }
+        catch (e) { tried.push({ source, ok: false, kind: e?.kind || 'down', error: e instanceof LookupError ? describeFailure(label, e) : `${label} could not be reached.` }); return null; }
+      };
+      let hit = await attempt('dsld', 'NIH supplement database', () => lookup.dsldByUpc(code, { uid: user.id }));
+      if (hit) return json(res, 200, { code, found: true, via: 'dsld', product: hit.product, tried });
+      hit = await attempt('off', 'Open Food Facts', async () => { const r = await lookup.barcode(code); if (r.reason === 'error') throw new LookupError(r.kind || 'down', 'off', r.error); return r; });
+      if (hit) return json(res, 200, { code, found: true, via: 'off', product: hit.product, tried });
+      const key = cfg.usdaKey();
+      if (key) {
+        hit = await attempt('usda', 'USDA FoodData Central', () => lookup.usdaByUpc(code, key, { uid: user.id }));
+        if (hit) return json(res, 200, { code, found: true, via: 'usda', product: hit.product, tried });
+      }
+      json(res, 200, { code, found: false, reason: 'unknown', tried, ...(tried.some(t => !t.ok) ? { incomplete: true } : {}) });
     }),
 
     /* ----- Apple Health, via a Shortcut ----- */
@@ -496,6 +521,27 @@ export function nutritionRoutes({
     /* ----- Fill in micronutrients from USDA stand-ins. Nothing is saved until the person accepts (apply). -----
        match: one AI call for the whole batch, only to pick which USDA food is the closest; every number comes from USDA. */
 
+    // Read a food or supplement label from 1 to 4 photos. One analysis of the allowance, refunded if the model never ran.
+    // The model's answer is only ever used through label.validateLabel / mapLabel; the person reviews it before anything is saved.
+    'POST /api/nutrition/label': guarded(async (req, res, user) => {
+      const input = checkLabelInput(await readBody(req, BODY.label));
+      if (!input.ok) return fail(res, 400, input.error);
+      const limit = cfg.load().aiDailyCap;
+      if (limit === 0) return json(res, 403, { error: 'AI logging is switched off by an admin.', code: 'ai-off', ai: allowance(user.id) });
+      const avail = availability(user.id);
+      if (!avail.ok) return aiFail(res, avail.code, user.id);
+      const slot = await store.reserveAi(user.id, limit);
+      if (!slot.ok) return aiFail(res, 'cap', user.id);
+      let r;
+      try { r = await analyzer.ask(user.id, { images: input.images, prompt: label.prompt(input.hint, input.note), systemPrompt: label.SYSTEM, validate: label.validateLabel }); }
+      catch (e) { await store.refundAi(user.id); throw e; }
+      if (!r.ok) {
+        if (r.refund) await store.refundAi(user.id);
+        return aiFail(res, r.code, user.id, r.detail);
+      }
+      json(res, 200, { label: label.mapLabel(r.result), ms: r.ms, ai: allowance(user.id) });
+    }),
+
     'POST /api/nutrition/micros/match': guarded(async (req, res, user) => {
       const body = await readBody(req, BODY.small);
       const date = dateOf(res, body?.date); if (!date) return;
@@ -623,6 +669,34 @@ export function nutritionRoutes({
         if (!hit) return null;
         hit.entry.microsEst = rec;
         return { entry: hit.entry, day: store.dayView(d, date) };
+      });
+      out ? json(res, 200, out) : fail(res, 404, 'no such entry');
+    }),
+
+    // Put micronutrients read from the person's photo of a label onto an entry, as the entry's own (label) data, not as an estimate.
+    // `micros` is the whole-entry amounts the person reviewed. A nutrient the entry already has is only replaced when it is
+    // named in `overwrite`; everything else is added. Strictly validated like every other micros.
+    'POST /api/nutrition/micros/label': guarded(async (req, res, user) => {
+      const body = await readBody(req, BODY.small);
+      const date = dateOf(res, body?.date); if (!date) return;
+      const id = idOf(res, body?.id); if (!id) return;
+      const m = microsOf(body?.micros);
+      if (!m.ok) return invalid(res, m);
+      if (!Object.keys(m.value).length) return fail(res, 400, 'there are no nutrients to add');
+      const overwrite = Array.isArray(body?.overwrite) ? body.overwrite.filter(k => typeof k === 'string') : [];
+      const out = await store.mutate(user.id, d => {
+        const hit = store.findEntry(d, date, id);
+        if (!hit) return null;
+        const e = hit.entry;
+        const merged = { ...(e.micros || {}) };
+        const added = [], replaced = [], kept = [];
+        for (const [k, val] of Object.entries(m.value)) {
+          if (!Object.hasOwn(merged, k)) { merged[k] = val; added.push(k); }
+          else if (overwrite.includes(k)) { merged[k] = val; replaced.push(k); }
+          else kept.push(k);
+        }
+        if (added.length || replaced.length) { e.micros = merged; e.microsSource = 'label'; }
+        return { entry: e, added, replaced, kept, day: store.dayView(d, date) };
       });
       out ? json(res, 200, out) : fail(res, 404, 'no such entry');
     }),

@@ -27,7 +27,8 @@ import { clean, round } from './validate.js';
 import { rankHits, dupKey, chooseServingGrams, servingLabel } from './rank.js';
 import { hasMicros, scaleMicros } from './micros.js';
 import { microsFromOff, microsFromUsda } from './micros-sources.js';
-import { TEXT as USDA_TEXT } from './usda-budget.js';
+import { TEXT as USDA_TEXT, DSLD_TEXT } from './usda-budget.js';
+import * as dsld from './dsld.js';
 
 const OFF_BASE = () => (process.env.NUTRITION_OFF_BASE || 'https://world.openfoodfacts.org').replace(/\/$/, '');
 const USDA_BASE = () => (process.env.NUTRITION_USDA_BASE || 'https://api.nal.usda.gov/fdc/v1').replace(/\/$/, '');
@@ -211,7 +212,8 @@ export function createLookup({
   timeoutMs = TIMEOUT_MS, retryTimeoutMs = Math.min(RETRY_TIMEOUT_MS, timeoutMs), retryDelayMs = RETRY_DELAY_MS,
   budgetMs = timeoutMs + retryTimeoutMs + 3000, userAgent = 'openGym-nutrition (self-hosted)',
   fatsecret: fs = null,          // fatsecret.js's client, injected so this file never imports it (it imports this one)
-  usdaBudget = null              // usda-budget.js: every request sent to USDA is counted against it
+  usdaBudget = null,             // usda-budget.js: every request sent to USDA is counted against it
+  dsldBudget = null              // the same for the NIH supplement database
 } = {}) {
   const cache = new Map();
   const inflight = new Map();
@@ -443,7 +445,52 @@ export function createLookup({
     return remember(key, { ...cand, per100: b100.per, micros100: b100.micros || {} }, BARCODE_TTL);
   }
 
-  return { search, barcode, usdaCandidates, usdaFood, _cache: cache };
+
+  /* ----- supplement barcodes: NIH DSLD, then USDA Branded (Open Food Facts is barcode() above) ----- */
+
+  /** A request to the NIH DSLD, counted against its budget first. No key is sent (none is documented in anything I could read). */
+  function dsldFetch(url, deadline, uid) {
+    const over = dsldBudget?.take(uid);
+    if (over) return Promise.reject(new LookupError('limit', 'DSLD budget: ' + over, DSLD_TEXT[over]()));
+    return fetchRetry(url, deadline);
+  }
+
+  /**
+   * The label for this barcode in DSLD: search-filter with the digits in quotes (what the API guide says to do for a barcode),
+   * then each candidate's label confirms the UPC; the newest label still on the market wins.
+   * @returns {Promise<{found:boolean, product?:object}>} (throws LookupError when DSLD cannot answer)
+   */
+  async function dsldByUpc(code, { uid = null } = {}) {
+    const key = 'dsld|' + code;
+    const hit = recall(key); if (hit) return hit;
+    const deadline = now() + budgetMs * 2;
+    const s = await dsldFetch(`${dsld.base()}/search-filter?q=${encodeURIComponent('"' + code + '"')}`, deadline, uid);
+    const hits = s.notFound ? [] : dsld.parseSearch(s.data);
+    if (!hits) { logShape('NIH DSLD', 'search', s.status, s.data, now); throw new LookupError('bad', 'unexpected shape'); }
+    const cands = hits.filter(h => !h.upc || dsld.sameBarcode(h.upc, code)).slice(0, 4);
+    const labels = [];
+    for (const c of cands) {
+      try {
+        const r = await dsldFetch(`${dsld.base()}/label/${encodeURIComponent(c.id)}`, deadline, uid);
+        const l = r.notFound ? null : dsld.parseLabel(r.data && typeof r.data === 'object' ? { id: c.id, ...r.data } : null);
+        if (l && dsld.sameBarcode(l.upc, code)) labels.push({ ...l, id: l.id || c.id });
+      } catch (e) { if (!labels.length && c === cands[cands.length - 1]) throw e; }
+    }
+    const best = dsld.pickBest(labels);
+    return remember(key, best ? { found: true, product: dsld.hitOfLabel(best), versions: labels.length } : { found: false }, best ? BARCODE_TTL : 10 * 60000);
+  }
+
+  /** A USDA Branded food by its barcode (the search takes the digits), or { found:false }. */
+  async function usdaByUpc(code, apiKey, { uid = null } = {}) {
+    const key = 'usdaupc|' + code;
+    const hit = recall(key); if (hit) return hit;
+    const r = await usdaFetch(`${USDA_BASE()}/foods/search?` + new URLSearchParams({ query: code, pageSize: '5', dataType: 'Branded' }), now() + budgetMs, uid, apiKey);
+    const foods = listOf('USDA FoodData Central', 'search', r, 'foods').filter(f => dsld.sameBarcode(f.gtinUpc, code));
+    const n = foods.map(normaliseUsda).filter(Boolean)[0];
+    return remember(key, n ? { found: true, product: { ...n, upc: code } } : { found: false }, n ? BARCODE_TTL : 10 * 60000);
+  }
+
+  return { search, barcode, dsldByUpc, usdaByUpc, usdaCandidates, usdaFood, _cache: cache };
 }
 
 /** A barcode as typed or scanned: digits only, 8–14 of them (EAN-8, UPC-A, EAN-13, GTIN-14). */

@@ -44,7 +44,12 @@ export function readCounter(file, log = console.error) {
   }
 }
 
-export function createUsdaBudget({ file, now = Date.now, log = console.error } = {}) {
+export function createUsdaBudget(o = {}) {
+  return createBudget({ ...o, caps: { hour: HOUR_CAP, day: DAY_CAP, user: USER_HOUR_CAP } });
+}
+
+/** The same counting for any outside service: caps = { hour, day, user } (functions, so environment changes apply). */
+export function createBudget({ file, now = Date.now, log = console.error, caps } = {}) {
   let state = null;
   const fresh = t => ({ day: dayOf(t), dayTotal: 0, hour: hourOf(t), hourTotal: 0, users: {} });
   const load = () => {
@@ -62,15 +67,26 @@ export function createUsdaBudget({ file, now = Date.now, log = console.error } =
     /** Spend one request. Returns null when allowed, else which budget is used up ('server-hour', 'server-day' or 'user-hour'). */
     take(uid) {
       const s = load();
-      if (s.hourTotal >= HOUR_CAP()) return 'server-hour';
-      if (s.dayTotal >= DAY_CAP()) return 'server-day';
+      if (s.hourTotal >= caps.hour()) return 'server-hour';
+      if (s.dayTotal >= caps.day()) return 'server-day';
       const mine = typeof uid === 'string' && uid ? (Object.hasOwn(s.users, uid) ? s.users[uid] : 0) : 0;
-      if (uid && mine >= USER_HOUR_CAP()) return 'user-hour';
+      if (uid && mine >= caps.user()) return 'user-hour';
       s.hourTotal++; s.dayTotal++;
       if (uid) s.users[uid] = mine + 1;
       save();
       return null;
     },
-    snapshot() { const s = load(); return { hour: { used: s.hourTotal, cap: HOUR_CAP() }, day: { used: s.dayTotal, cap: DAY_CAP() }, userHourCap: USER_HOUR_CAP() }; }
+    snapshot() { const s = load(); return { hour: { used: s.hourTotal, cap: caps.hour() }, day: { used: s.dayTotal, cap: caps.day() }, userHourCap: caps.user() }; }
   };
 }
+
+/* The NIH DSLD budget (dsld.js): its limits are not documented in anything I could read, so the defaults are modest and the
+ * app stops itself long before any limit could matter. NUTRITION_DSLD_HOURLY_CAP (300), NUTRITION_DSLD_DAILY_CAP (3000),
+ * NUTRITION_DSLD_USER_HOURLY_CAP (60). A barcode lookup is 1 search + up to 4 label requests. */
+export const DSLD_TEXT = {
+  'server-hour': () => `This server has used its NIH supplement database lookups for this hour (${DSLD_CAPS.hour()}). They come back at the top of the hour.`,
+  'server-day': () => `This server has used its NIH supplement database lookups for today (${DSLD_CAPS.day()}). They come back at midnight UTC.`,
+  'user-hour': () => `You have used your share of NIH supplement database lookups for this hour (${DSLD_CAPS.user()}). They come back at the top of the hour.`
+};
+export const DSLD_CAPS = { hour: () => int(process.env.NUTRITION_DSLD_HOURLY_CAP, 300), day: () => int(process.env.NUTRITION_DSLD_DAILY_CAP, 3000), user: () => int(process.env.NUTRITION_DSLD_USER_HOURLY_CAP, 60) };
+export const createDsldBudget = (o = {}) => createBudget({ ...o, caps: DSLD_CAPS });

@@ -224,6 +224,12 @@ export function findSavedFood(d, name, brand = '', type = null) {
   return Object.values(d.foods).find(f => f.source === 'custom' && (f.type || null) === (type || null) && norm(f.name) === n && norm(f.brand) === b) || null;
 }
 
+/** The saved (custom) food or supplement with this barcode, or null. `type`: 'supplement' or null for foods; undefined = either. */
+export function findByUpc(d, upc, type) {
+  if (!upc) return null;
+  return Object.values(d.foods).find(f => f.source === 'custom' && f.upc === String(upc) && (type === undefined || (f.type || null) === (type || null))) || null;
+}
+
 /** Remember a food that came from search or the AI, as a recent. Same food again → same row. */
 export function noteRecent(d, input) {
   const candidate = { source: 'custom', ext: null, ...input };
@@ -277,6 +283,7 @@ export function updateEntry(d, date, id, patch, newDate) {
   if (next.confidence === null) delete next.confidence;
   if (next.base == null) delete next.base;
   if (next.micros == null) delete next.micros;
+  if (next.microsSource == null) delete next.microsSource;
   if (newDate && newDate !== date) {
     if (!d.days[newDate]) checkRoom(d, newDate, 0);
     const target = (d.days[newDate] ||= { entries: [] });
@@ -328,17 +335,22 @@ export function refundAi(uid) {
  * them with the other sources, with a rank above every outside source ("My food" always comes first). A saved food
  * is one serving, so it has one base. Closer names first; favourites and often-used ones break ties.
  */
+/** A saved food or supplement shaped like a lookup hit (one base: the serving it was saved with). */
+export function savedHit(f) {
+  return {
+    source: 'mine', kind: f.origin === 'ai' ? 'ai' : 'mine', origin: f.origin || null, ext: f.id, name: f.name, brand: f.brand || '', type: f.type || null,
+    ...(f.upc ? { upc: f.upc } : {}), ...(f.otherIngredients?.length ? { otherIngredients: f.otherIngredients } : {}),
+    bases: [{ label: f.serving?.label || '1 serving', grams: f.serving?.grams ?? null, per: f.per, ...(f.micros ? { micros: f.micros } : {}) }]
+  };
+}
+
 export function searchSaved(d, q, limit = 10) {
   const out = [];
   for (const f of Object.values(d.foods)) {
     if (f.source !== 'custom' || f.type === 'supplement') continue;       // supplements have their own list
     const r = relevance(q, f.name, f.brand);
     if (!r.full) continue;
-    out.push({
-      source: 'mine', kind: f.origin === 'ai' ? 'ai' : 'mine', origin: f.origin || null, ext: f.id, name: f.name, brand: f.brand || '',
-      bases: [{ label: f.serving?.label || '1 serving', grams: f.serving?.grams ?? null, per: f.per, ...(f.micros ? { micros: f.micros } : {}) }],
-      rank: 5000 + r.score + (f.favorite ? 20 : 0) + Math.min(10, f.useCount || 0)
-    });
+    out.push({ ...savedHit(f), rank: 5000 + r.score + (f.favorite ? 20 : 0) + Math.min(10, f.useCount || 0) });
   }
   return out.sort((a, b) => b.rank - a.rank).slice(0, limit);
 }
